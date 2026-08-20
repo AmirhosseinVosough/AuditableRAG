@@ -1,0 +1,20 @@
+{
+  "query": "weighted average expense ratio for ESG funds, excluding funds closed in Q3",
+  "qualifying_funds": [
+    "Evergreen ESG Equity Fund",
+    "Horizon Sustainable Bond Fund",
+    "Climate Transition Leaders Fund",
+    "Green Infrastructure Fund",
+    "Responsible Global Index Fund",
+    "ESG Income Opportunities Fund"
+  ],
+  "excluded_funds": {
+    "Sustainable Value Fund": "closed in Q3",
+    "ESG Real Assets Fund": "closed in Q3",
+    "ESG Defensive Allocation Fund": "inactive (closed in Q4)",
+    "Core US Equity Fund": "not ESG",
+    "Global Opportunities Fund": "not ESG",
+    "Income Balanced Fund": "not ESG and closed in Q3"
+  },
+  "correct_answer": 0.4187142857
+}

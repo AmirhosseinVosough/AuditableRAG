@@ -1,0 +1,1 @@
+"""Fund aggregation pipeline package."""
