@@ -154,6 +154,71 @@ def verify_extraction_completeness(
     )
 
 
+# --- Amended Phase 5: per-fund quality checks (bounds + name consistency) ---
+#
+# `verify_extraction_completeness` above answers "did every expected fund
+# produce *a* result" - it says nothing about whether that result is
+# *plausible*. A fund whose text says "Expense Ratio: 999%" (a corrupted
+# document, a mis-OCR'd digit, a unit mix-up) or whose extracted name
+# doesn't match the document Phase 3 actually parsed (the model answered
+# about the wrong fund) passes the completeness check just fine - it's not
+# missing, it's just wrong. This is the gap the build prompt's "Amendments
+# to Phases 1-9" table calls out for this module, and Phase 12's agentic
+# orchestrator requires it as part of its EVALUATE step (retrying a fund
+# that fails this, not just one that failed to extract at all).
+#
+# Deliberately a *separate* function, not a change to
+# verify_extraction_completeness's behavior or signature - existing callers
+# (pipeline.py, test_pipeline.py) are unaffected. Bounds are conservative
+# but real: no fund in this project's domain has an expense ratio anywhere
+# near 10%, or zero/negative AUM.
+_MAX_PLAUSIBLE_EXPENSE_RATIO_PERCENT = 10.0
+
+
+def check_extraction_quality(
+    *,
+    expected_name: str,
+    extracted_name: str,
+    expense_ratio: float,
+    aum: float,
+) -> tuple[str, ...]:
+    """Return every quality problem found with one fund's extracted fields; empty if none.
+
+    Args:
+        expected_name: The fund name Phase 3 parsed for this document -
+            the trusted identity, independent of what the LLM says.
+        extracted_name: The fund name Phase 4 (`extract_fund_fields`)
+            reported for the same document.
+        expense_ratio: Extracted expense ratio, as a percentage number
+            (e.g. 0.45 for 0.45%).
+        aum: Extracted assets under management, in millions of USD.
+
+    Returns:
+        A tuple of human-readable problem descriptions - one entry per
+        problem found, so a caller can log or retry on the specific
+        reason rather than a generic "invalid". Empty tuple means every
+        check passed.
+    """
+    problems: list[str] = []
+
+    if extracted_name != expected_name:
+        problems.append(
+            f"name mismatch: Phase 3 parsed {expected_name!r} for this document, "
+            f"but extraction reported {extracted_name!r}"
+        )
+
+    if not (0 < expense_ratio < _MAX_PLAUSIBLE_EXPENSE_RATIO_PERCENT):
+        problems.append(
+            f"expense_ratio {expense_ratio!r} is outside the plausible range "
+            f"(0, {_MAX_PLAUSIBLE_EXPENSE_RATIO_PERCENT})"
+        )
+
+    if not (aum > 0):
+        problems.append(f"aum {aum!r} is not positive")
+
+    return tuple(problems)
+
+
 def _load_dotenv(path: Path) -> None:
     """Populate os.environ from a simple KEY=VALUE .env file, if present.
 
