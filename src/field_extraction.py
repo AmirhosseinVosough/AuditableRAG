@@ -10,8 +10,15 @@ from pathlib import Path
 from groq import Groq
 from groq.types.chat import ChatCompletionToolChoiceOptionParam, ChatCompletionToolParam
 
+from src.model_fallback import call_with_model_fallback, models_to_try
 
-DEFAULT_MODEL = "openai/gpt-oss-120b"  # llama-3.3-70b-versatile was retired from Groq; verified this one still forces tool calls correctly.
+# llama-3.3-70b-versatile was retired from Groq. FALLBACK_MODELS[0] (see
+# model_fallback.py) is openai/gpt-oss-120b - verified to force tool calls
+# correctly. DEFAULT_MODEL stays a plain string (not the tuple) since every
+# caller in this codebase passes a single `model: str` - the fallback chain
+# behind it is applied automatically inside extract_fund_fields /
+# extract_real_fund_fields, not something callers need to opt into.
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 
 _TOOL_NAME = "record_fund_fields"
 
@@ -75,6 +82,13 @@ def extract_fund_fields(
     Structured output is enforced by forcing the model to call the
     ``record_fund_fields`` tool rather than parsing free-form JSON out of a
     text response.
+
+    If the call to *model* fails outright (rate limit, network error, a
+    malformed/missing tool call - not a legitimate result), this
+    automatically falls back to the next model in
+    `model_fallback.FALLBACK_MODELS`, logging a warning first - see
+    `model_fallback.call_with_model_fallback`. Only raises once every model
+    in the chain has failed.
     """
     if not text.strip():
         raise ValueError("Cannot extract fields from empty fund text")
@@ -87,30 +101,34 @@ def extract_fund_fields(
         #"none": The model is forbidden from calling any tools. It will only reply with standard text.
         # "required": The model must choose and call at least one tool from your list, but it gets to decide which specific tool to use.
     }
-    response = active_client.chat.completions.create(
-        model=model,
-        max_tokens=150, #prevents generational loop
-        seed=42, #helps with reproducibility of results, but it is not guaranteed to produce the same output every time.
-        tools=[_TOOL_SCHEMA], 
-        tool_choice=tool_choice, 
-        temperature=0.0,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": f"Fund fact sheet text:\n\n{text}"},
-        ],
-    )
 
-    tool_calls = response.choices[0].message.tool_calls or []
-    for call in tool_calls:
-        if call.function.name == _TOOL_NAME:
-            fields = json.loads(call.function.arguments)
-            return ExtractedFields(
-                fund_name=str(fields.get("fund_name", "unknown fund")),
-                expense_ratio=float(fields.get("expense_ratio", 0.0)),
-                aum=float(fields.get("aum", 0.0)),
-            )
+    def _call(model_name: str) -> ExtractedFields:
+        response = active_client.chat.completions.create(
+            model=model_name,
+            max_tokens=150, #prevents generational loop
+            seed=42, #helps with reproducibility of results, but it is not guaranteed to produce the same output every time.
+            tools=[_TOOL_SCHEMA],
+            tool_choice=tool_choice,
+            temperature=0.0,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": f"Fund fact sheet text:\n\n{text}"},
+            ],
+        )
 
-    raise ValueError("Model response did not include the expected tool call")
+        tool_calls = response.choices[0].message.tool_calls or []
+        for call in tool_calls:
+            if call.function.name == _TOOL_NAME:
+                fields = json.loads(call.function.arguments)
+                return ExtractedFields(
+                    fund_name=str(fields.get("fund_name", "unknown fund")),
+                    expense_ratio=float(fields.get("expense_ratio", 0.0)),
+                    aum=float(fields.get("aum", 0.0)),
+                )
+
+        raise ValueError("Model response did not include the expected tool call")
+
+    return call_with_model_fallback(_call, models=models_to_try(model))
 
 
 # --- Phase 9c: real-data mode extraction -------------------------------------
@@ -270,9 +288,17 @@ def extract_real_fund_fields(
         type (discarded rather than force-converted).
 
     Raises:
-        ValueError: If `text` is empty/whitespace-only, if the model's
-            tool-call arguments aren't valid JSON, or if the model's
-            response doesn't include the expected tool call at all.
+        ValueError: If `text` is empty/whitespace-only, or if every model in
+            the fallback chain (see below) failed - the last one's error is
+            what's raised.
+
+    Automatic model fallback: if the call to *model* fails outright (rate
+    limit, network error, malformed tool-call JSON, missing tool call at
+    all), this falls back to the next model in
+    `model_fallback.FALLBACK_MODELS`, logging a warning first - see
+    `model_fallback.call_with_model_fallback`. A field that legitimately
+    comes back null is never a fallback trigger - that's a correct result,
+    not a failure.
     """
     if not text.strip():
         raise ValueError("Cannot extract fields from empty document text")
@@ -283,35 +309,39 @@ def extract_real_fund_fields(
         "type": "function",
         "function": {"name": _REAL_TOOL_NAME},
     }
-    response = active_client.chat.completions.create(
-        model=model,
-        # Real documents run 10-20K+ characters (vs. the synthetic fixture's
-        # ~200) and this model reasons before answering - at the synthetic
-        # call's max_tokens=150 the response was observed to get cut off
-        # mid-tool-call (either an empty generation or truncated JSON
-        # arguments) before it ever finished. 1024 leaves real headroom for
-        # both the reasoning and the five-field tool call.
-        max_tokens=1024,
-        seed=42,
-        tools=[_REAL_TOOL_SCHEMA],
-        tool_choice=tool_choice,
-        temperature=0.0,
-        messages=[
-            {"role": "system", "content": _REAL_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Document text:\n\n{text}"},
-        ],
-    )
 
-    tool_calls = response.choices[0].message.tool_calls or []
-    for call in tool_calls:
-        if call.function.name == _REAL_TOOL_NAME:
-            try:
-                fields = json.loads(call.function.arguments)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"Model returned malformed tool-call arguments: {exc}") from exc
-            return _build_real_extracted_fields(fields)
+    def _call(model_name: str) -> RealExtractedFields:
+        response = active_client.chat.completions.create(
+            model=model_name,
+            # Real documents run 10-20K+ characters (vs. the synthetic fixture's
+            # ~200) and this model reasons before answering - at the synthetic
+            # call's max_tokens=150 the response was observed to get cut off
+            # mid-tool-call (either an empty generation or truncated JSON
+            # arguments) before it ever finished. 1024 leaves real headroom for
+            # both the reasoning and the five-field tool call.
+            max_tokens=1024,
+            seed=42,
+            tools=[_REAL_TOOL_SCHEMA],
+            tool_choice=tool_choice,
+            temperature=0.0,
+            messages=[
+                {"role": "system", "content": _REAL_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Document text:\n\n{text}"},
+            ],
+        )
 
-    raise ValueError("Model response did not include the expected tool call")
+        tool_calls = response.choices[0].message.tool_calls or []
+        for call in tool_calls:
+            if call.function.name == _REAL_TOOL_NAME:
+                try:
+                    fields = json.loads(call.function.arguments)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Model returned malformed tool-call arguments: {exc}") from exc
+                return _build_real_extracted_fields(fields)
+
+        raise ValueError("Model response did not include the expected tool call")
+
+    return call_with_model_fallback(_call, models=models_to_try(model))
 
 
 def _coerce_optional_field(

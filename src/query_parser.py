@@ -34,6 +34,7 @@ from groq import Groq
 from groq.types.chat import ChatCompletionToolChoiceOptionParam, ChatCompletionToolParam
 
 from src.field_extraction import DEFAULT_MODEL
+from src.model_fallback import call_with_model_fallback, models_to_try
 
 
 @dataclass(frozen=True)
@@ -212,6 +213,15 @@ def parse_query(
             response doesn't include either expected tool call at all.
         UnsupportedQueryError: If the model determined the question cannot
             be mapped onto QuerySpec's supported fields.
+
+    Automatic model fallback: if the call to *model* fails outright (rate
+    limit, network error, malformed tool-call JSON, neither expected tool
+    called), this falls back to the next model in
+    `model_fallback.FALLBACK_MODELS`, logging a warning first. A question
+    the model correctly rejects as out of scope is NOT a failure - it is a
+    legitimate answer - so it is never retried against a different model;
+    see the `_call` closure below for how that distinction is kept out of
+    `call_with_model_fallback`'s generic exception-means-retry logic.
     """
     if not question.strip():
         raise ValueError("Cannot parse an empty question")
@@ -224,46 +234,59 @@ def parse_query(
     # single-named-tool pattern.
     tool_choice: ChatCompletionToolChoiceOptionParam = "required"
 
-    response = active_client.chat.completions.create(
-        model=model,
-        max_tokens=400,
-        seed=42,
-        tools=[_QUERY_SPEC_TOOL_SCHEMA, _REJECT_TOOL_SCHEMA],
-        tool_choice=tool_choice,
-        temperature=0.0,
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": question},
-        ],
-    )
+    def _call(model_name: str) -> QuerySpec | UnsupportedQueryError:
+        """Returns a QuerySpec on success, or an *unraised* UnsupportedQueryError instance
+        when the model correctly rejects the question. Returning it (rather than raising)
+        is deliberate: call_with_model_fallback treats any exception as "this model failed,
+        try the next one," and a correct rejection must never trigger that - it's the right
+        answer, not a failure. parse_query raises it itself, once, after the fallback
+        machinery has already decided this was the model's final word.
+        """
+        response = active_client.chat.completions.create(
+            model=model_name,
+            max_tokens=400,
+            seed=42,
+            tools=[_QUERY_SPEC_TOOL_SCHEMA, _REJECT_TOOL_SCHEMA],
+            tool_choice=tool_choice,
+            temperature=0.0,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": question},
+            ],
+        )
 
-    tool_calls = response.choices[0].message.tool_calls or []
-    for call in tool_calls:
-        if call.function.name == _REJECT_TOOL_NAME:
-            try:
-                args = json.loads(call.function.arguments)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"Model returned malformed tool-call arguments: {exc}") from exc
-            raise UnsupportedQueryError(
-                question=question, reason=str(args.get("reason", "not specified"))
-            )
+        tool_calls = response.choices[0].message.tool_calls or []
+        for call in tool_calls:
+            if call.function.name == _REJECT_TOOL_NAME:
+                try:
+                    args = json.loads(call.function.arguments)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Model returned malformed tool-call arguments: {exc}") from exc
+                return UnsupportedQueryError(
+                    question=question, reason=str(args.get("reason", "not specified"))
+                )
 
-        if call.function.name == _QUERY_SPEC_TOOL_NAME:
-            try:
-                args = json.loads(call.function.arguments)
-            except json.JSONDecodeError as exc:
-                raise ValueError(f"Model returned malformed tool-call arguments: {exc}") from exc
-            return QuerySpec(
-                is_esg=args.get("is_esg"),
-                status=args.get("status"),
-                closed_quarter_exclusions=tuple(args.get("closed_quarter_exclusions", ())),
-                requested_metric=args["requested_metric"],
-            )
+            if call.function.name == _QUERY_SPEC_TOOL_NAME:
+                try:
+                    args = json.loads(call.function.arguments)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Model returned malformed tool-call arguments: {exc}") from exc
+                return QuerySpec(
+                    is_esg=args.get("is_esg"),
+                    status=args.get("status"),
+                    closed_quarter_exclusions=tuple(args.get("closed_quarter_exclusions", ())),
+                    requested_metric=args["requested_metric"],
+                )
 
-    raise ValueError(
-        "Model response did not include either expected tool call "
-        f"({_QUERY_SPEC_TOOL_NAME!r} or {_REJECT_TOOL_NAME!r})"
-    )
+        raise ValueError(
+            "Model response did not include either expected tool call "
+            f"({_QUERY_SPEC_TOOL_NAME!r} or {_REJECT_TOOL_NAME!r})"
+        )
+
+    result = call_with_model_fallback(_call, models=models_to_try(model))
+    if isinstance(result, UnsupportedQueryError):
+        raise result
+    return result
 
 
 def _load_dotenv(path: Path) -> None:

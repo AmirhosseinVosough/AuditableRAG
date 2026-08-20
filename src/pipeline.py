@@ -30,11 +30,13 @@ at a glance which mode is running and why:
         via `real_data_loader.load_real_pdfs`. `parse_fund_metadata`'s
         regexes are keyed to the synthetic fixture's exact label text and
         essentially never match a real document, so this path never calls
-        it - is_esg/status/expense_ratio/aum are all determined in one LLM
-        pass per document via `field_extraction.extract_real_fund_fields`,
-        with every field allowed to come back null rather than guessed. See
-        that function's docstring for the extraction contract, and the
-        "expected vs. collected" note below for how Phase 5 still applies.
+        it - each document goes through `extraction_cascade.extract_with_cascade`
+        (regex pre-pass -> BM25 page-narrowing -> semantic-stub ->
+        `field_extraction.extract_real_fund_fields` -> table-data retry ->
+        OCR-stub -> flag), with every field allowed to come back null rather
+        than guessed. See that module's docstring for the full tier
+        breakdown, and the "expected vs. collected" note below for how
+        Phase 5 still applies.
 
 Both modes produce identically-shaped output (`PipelineResult`) and share
 Phase 2, Phase 5, and Phase 6 verbatim - only how a document's identity/text
@@ -75,13 +77,8 @@ from typing import Literal
 from groq import Groq
 
 from src.calculator import weighted_average_expense_ratio
-from src.field_extraction import (
-    DEFAULT_MODEL,
-    ExtractedFields,
-    RealExtractedFields,
-    extract_fund_fields,
-    extract_real_fund_fields,
-)
+from src.extraction_cascade import extract_with_cascade
+from src.field_extraction import DEFAULT_MODEL, ExtractedFields, RealExtractedFields, extract_fund_fields
 from src.fund_filter import FilterSpec, FundMetadata, filter_funds, parse_fund_metadata
 from src.pdf_extraction import extract_pdf_content
 from src.real_data_loader import load_real_pdfs
@@ -355,35 +352,33 @@ def _run_real_pipeline(
     for pdf_path in pdf_paths:
         identity = pdf_path.stem  # canonical identity for real mode - see module docstring
 
-        # --- "could not be read": a document-level failure, checked before
-        # ever calling the LLM, since there is no text to send it. ---
+        # --- run the full extraction cascade for this one document
+        # (extraction_cascade.py: Phase 2 read, then regex -> BM25 ->
+        # semantic-stub -> LLM -> table-data -> OCR-stub -> flag). Isolated
+        # per document, same as the old direct-call version was, so one bad
+        # document can't take down the batch. This replaces what used to be
+        # two separate calls here (extract_pdf_content then
+        # extract_real_fund_fields) - the cascade does both, plus the
+        # cheaper tiers, internally. ---
         try:
-            extraction = extract_pdf_content(pdf_path)
-        except Exception as exc:  # noqa: BLE001 - any parser failure means "unreadable"; isolate it from the batch
-            logger.error("Phase 2 extraction failed for %r: %s", pdf_path.name, exc)
-            excluded_funds.append(ExcludedFund(name=identity, reason=f"could not be read: {exc}"))
-            continue
-
-        text = extraction["text"]
-        if not isinstance(text, str) or not text.strip():
-            excluded_funds.append(
-                ExcludedFund(name=identity, reason="could not be read: no extractable text")
-            )
-            continue
-
-        # --- extract everything in one LLM pass; every field may come back null ---
-        try:
-            fields = extract_real_fund_fields(text, client=active_client, model=model)
+            cascade_result = extract_with_cascade(pdf_path, client=active_client, model=model)
         except Exception as exc:  # noqa: BLE001 - isolate one bad document from the rest of the batch
-            logger.error("Real-data extraction failed for %r: %s", pdf_path.name, exc)
+            logger.error("Extraction cascade failed for %r: %s", pdf_path.name, exc)
             excluded_funds.append(ExcludedFund(name=identity, reason=f"extraction failed: {exc}"))
             continue
 
+        fields = cascade_result.fields
         display_name = fields.fund_name or identity
 
         # --- bucket 1: can't tell if it qualifies at all ---
+        # Covers both "could not be read" (the cascade reports that with
+        # is_esg/status both null too, so it lands here without a separate
+        # check) and "is_esg/status genuinely not found". Uses the
+        # cascade's own review_reasons rather than fields.flags - it's a
+        # strict superset (also covers regex/LLM cross-check disagreements
+        # and which tier, if any, resolved each field).
         if fields.is_esg is None or fields.status is None:
-            reason = "could not determine ESG/active status (" + "; ".join(fields.flags) + ")"
+            reason = "; ".join(cascade_result.review_reasons) or "could not determine ESG/active status"
             excluded_funds.append(ExcludedFund(name=display_name, reason=reason))
             continue
 
