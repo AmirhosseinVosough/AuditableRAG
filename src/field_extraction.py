@@ -141,10 +141,11 @@ _REAL_TOOL_SCHEMA: ChatCompletionToolParam = {
             "real-world fund document's extracted text. This text was not "
             "written for automated parsing - it may be a fact sheet, "
             "prospectus, or shareholder report, in any layout. Omit a "
-            "property entirely if its value is not explicitly stated in the "
-            "text. Never guess, estimate, or infer a value from a "
-            "related-but-different figure - an omitted field is far more "
-            "useful downstream than a wrong one."
+            "property entirely (preferred), or set it to null, if its value "
+            "is not explicitly stated in the text - both are accepted. "
+            "Never guess, estimate, or infer a value from a "
+            "related-but-different figure - a null/omitted field is far "
+            "more useful downstream than a wrong one."
         ),
         "parameters": {
             "type": "object",
@@ -154,7 +155,7 @@ _REAL_TOOL_SCHEMA: ChatCompletionToolParam = {
                     "description": "The fund's full name exactly as written, if stated.",
                 },
                 "is_esg": {
-                    "type": "boolean",
+                    "type": ["boolean", "null"],
                     "description": (
                         "True if the text describes the fund as ESG-focused, "
                         "sustainable, or screened on environmental/social/"
@@ -168,8 +169,8 @@ _REAL_TOOL_SCHEMA: ChatCompletionToolParam = {
                     ),
                 },
                 "status": {
-                    "type": "string",
-                    "enum": ["active", "closed"],
+                    "type": ["string", "null"],
+                    "enum": ["active", "closed", None],
                     "description": (
                         "'active' if the text indicates the fund is currently "
                         "operating; 'closed' if it indicates the fund has been "
@@ -178,7 +179,7 @@ _REAL_TOOL_SCHEMA: ChatCompletionToolParam = {
                     ),
                 },
                 "expense_ratio": {
-                    "type": "number",
+                    "type": ["number", "null"],
                     "description": (
                         "The fund's expense ratio as a percentage number, e.g. "
                         "an expense ratio of 0.45% is recorded as 0.45. Omit "
@@ -188,7 +189,7 @@ _REAL_TOOL_SCHEMA: ChatCompletionToolParam = {
                     ),
                 },
                 "aum": {
-                    "type": "number",
+                    "type": ["number", "null"],
                     "description": (
                         "Assets under management - the fund's OWN total net "
                         "assets - in millions of USD, e.g. $120M or $120 "

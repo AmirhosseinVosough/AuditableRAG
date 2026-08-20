@@ -9,15 +9,20 @@ import pdfplumber
 
 
 Table: TypeAlias = list[list[str | None]]
-PDFExtraction: TypeAlias = dict[str, str | list[Table]]
+PDFExtraction: TypeAlias = dict[str, str | list[str] | list[Table]]
 
 
 def extract_pdf_content(pdf_path: str | Path) -> PDFExtraction:
-    """Return all extracted text and` any tables detected in *pdf_path*.
+    """Return all extracted text and any tables detected in *pdf_path*.
 
-    Text is joined with a blank line between pages. ``tables`` preserves the
-    page-by-page table order as returned by pdfplumber; it is empty when no
-    tables are detected.
+    ``text`` is joined with a blank line between pages, for callers that
+    only care about the document as a whole (this is everything Phases 1-9
+    ever needed). ``pages`` is the same text kept split one entry per page,
+    1-indexed page numbers implied by list position - added for the
+    extraction cascade (regex/BM25 need to know *which page* a match came
+    from; joining them loses that). ``tables`` preserves the page-by-page
+    table order as returned by pdfplumber; it is empty when no tables are
+    detected.
     """
     path = Path(pdf_path)
     if not path.is_file():
@@ -31,7 +36,7 @@ def extract_pdf_content(pdf_path: str | Path) -> PDFExtraction:
             page_text.append(page.extract_text() or "")
             tables.extend(page.extract_tables())
 
-    return {"text": "\n\n".join(page_text), "tables": tables}
+    return {"text": "\n\n".join(page_text), "pages": page_text, "tables": tables}
 
 
 extract_pdf = extract_pdf_content
