@@ -1,0 +1,76 @@
+{
+  "notes": "Hand-verified ground truth for Phase 9 real-data mode, built by reading each document's actual pdfplumber-extracted text (not the original PDF layout) and recording the correct values by hand. 5 real, publicly available fund fact sheets/reports (source_url given per document) plus one deliberately corrupted PDF to exercise the 'could not be read' path. All AUM figures in millions of USD. Where a field is genuinely ambiguous or absent in the source document (see per-document notes), 'acceptable_is_esg'/'acceptable_status' list every outcome that counts as correct - a real extractor that flags uncertainty (null) is right there, not just one that guesses the single 'true' value; a confident WRONG value is the only failure.",
+  "documents": {
+    "esgu_fact_sheet": {
+      "source_url": "https://www.ishares.com/us/literature/fact-sheet/esgu-ishares-esg-aware-msci-usa-etf-fund-fact-sheet-en-us.pdf",
+      "fund_name": "iShares ESG Aware MSCI USA ETF",
+      "is_esg": true,
+      "acceptable_is_esg": [true],
+      "status": "active",
+      "acceptable_status": ["active"],
+      "expense_ratio_percent": 0.15,
+      "aum_millions_usd": 17746.93,
+      "expected_outcome": "fully extracted, unambiguous",
+      "notes": "Explicit 'ESG Investment strategy' language plus a full MSCI ESG Fund Rating / Sustainability Characteristics section. 'Net Assets of Fund (M): $17,746.93' and 'Expense Ratio 0.15%' both stated plainly."
+    },
+    "ivv_fact_sheet": {
+      "source_url": "https://www.ishares.com/us/literature/fact-sheet/ivv-ishares-core-s-p-500-etf-fund-fact-sheet-en-us.pdf",
+      "fund_name": "iShares Core S&P 500 ETF",
+      "is_esg": false,
+      "acceptable_is_esg": [false, null],
+      "status": "active",
+      "acceptable_status": ["active", null],
+      "expense_ratio_percent": 0.03,
+      "aum_millions_usd": 888128.94,
+      "expected_outcome": "expense_ratio/aum unambiguous; is_esg/status may legitimately be flagged",
+      "notes": "Plain S&P 500 tracker - no ESG/sustainability content anywhere. is_esg=false is the correct real-world answer, but the document never makes a POSITIVE 'this fund does not screen for ESG' statement (funds essentially never do) - it's simply silent on the topic. A conservative extractor treating silence as 'no basis to decide' rather than inferring False from absence is legitimate, not a bug; a confident is_esg=true would not be. Same reasoning for status: the fact sheet never states 'this fund is active' in so many words - that's implied by it being a current dated performance report, which a strict extractor may reasonably not treat as sufficient explicit evidence. 'Net Assets of Fund (M): $888,128.94' and 'Expense Ratio 0.03%' are both stated plainly regardless."
+    },
+    "esgv_fact_sheet": {
+      "source_url": "https://workplace.vanguard.com/assets/corp/fund_communications/pdf_publish/us-products/fact-sheet/F4393.pdf",
+      "fund_name": "Vanguard ESG U.S. Stock ETF",
+      "is_esg": true,
+      "acceptable_is_esg": [true],
+      "status": "active",
+      "acceptable_status": ["active", null],
+      "expense_ratio_percent": 0.09,
+      "aum_millions_usd": 13178,
+      "expected_outcome": "is_esg/expense_ratio/aum unambiguous; status may legitimately be flagged",
+      "notes": "Explicit, detailed ESG screening criteria (excludes tobacco, weapons, gambling, etc.) - unambiguous. 'ETF total net assets $13,178 million' and 'Expense ratio 0.09%' both stated plainly. Like IVV, the fact sheet never explicitly states the fund is 'active' - only current performance data, which a strict extractor may reasonably decline to treat as an explicit status statement."
+    },
+    "spy_fact_sheet": {
+      "source_url": "https://www.ssga.com/library-content/products/factsheets/etfs/emea/factsheet-emea-en_gb-spy.pdf",
+      "fund_name": "SPDR S&P 500 ETF Trust",
+      "is_esg": false,
+      "acceptable_is_esg": [false, null],
+      "status": "active",
+      "acceptable_status": ["active", null],
+      "expense_ratio_percent": 0.0945,
+      "aum_millions_usd": null,
+      "acceptable_aum": [null],
+      "expected_outcome": "expense_ratio unambiguous; aum MUST be flagged, not guessed; is_esg/status may legitimately be flagged",
+      "notes": "DELIBERATE real-world edge case: this fact sheet never states the fund's own net assets/AUM anywhere. It DOES state 'Average Market Cap (M) US$1,446,274.40', which is the average market cap of the fund's underlying HOLDINGS, not the fund's own AUM - a correct extractor must not confuse the two, so aum=null is the only acceptable outcome here (unlike the other nullable fields above, a guessed number would be a real failure, not just an overly conservative one). Net/Gross Expense Ratio (0.0945%) is stated plainly regardless."
+    },
+    "ussg_fact_sheet": {
+      "source_url": "https://etf.dws.com/en-us/AssetDownload/Index/dd4a510e-449c-4288-a4ad-33dba692055e/USSG-TSRA.pdf",
+      "fund_name": "Xtrackers MSCI USA Selection Equity ETF",
+      "is_esg": true,
+      "acceptable_is_esg": [true, null],
+      "status": "active",
+      "acceptable_status": ["active", null],
+      "expense_ratio_percent": 0.09,
+      "aum_millions_usd": 577.18813,
+      "expected_outcome": "fully extracted, but is_esg is a genuinely nuanced call",
+      "notes": "DELIBERATE real-world edge case: this fund was renamed from 'Xtrackers MSCI USA ESG Leaders Equity ETF' to 'Xtrackers MSCI USA Selection Equity ETF' in Feb 2025, dropping 'ESG' from its name/ticker - but the document explicitly states the underlying index still selects 'companies with high environmental, social and governance (ESG) performance' and that the rename involved no change to methodology or investment policy. Hand-verified as is_esg=true based on the document's own substance, not the ticker; null (flagged as ambiguous) is also acceptable given the rename. A confident is_esg=false would be a real failure - the document actively describes ESG screening. 'Net Assets ($) 577,188,130' and 'Gross expense ratio ... 0.09%' are both stated plainly regardless. This document is an Annual Shareholder Report, not a fact sheet - deliberately different layout from the other four, to stress format diversity."
+    },
+    "corrupted_fact_sheet": {
+      "source_url": null,
+      "fund_name": null,
+      "is_esg": null,
+      "status": null,
+      "expense_ratio_percent": null,
+      "aum_millions_usd": null,
+      "expected_outcome": "flagged as could not be read",
+      "notes": "DELIBERATELY constructed for this test: a minimal file with a valid %PDF header but no valid cross-reference table or page tree behind it, so pdfplumber cannot extract any text from it - the same technique verification.py's Phase 5 demo already uses for the synthetic-mode equivalent of this case. This is the 'no extractable text at all' case from Phase 9c, not a naturally-occurring real document."
+    }
+  }
+}
