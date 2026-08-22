@@ -43,6 +43,7 @@ def _load_dotenv(path: Path) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
+
 # Runs at import time, not inside the test, because @pytest.mark.skipif's
 # condition is evaluated at collection - if this ran later, a .env-only key
 # (nothing exported in the shell) would cause a false skip.

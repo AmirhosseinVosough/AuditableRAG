@@ -4,3 +4,8 @@ pypdf>=5.0.0
 reportlab>=4.2.0
 pytest>=8.0.0
 rank_bm25>=0.2.2
+sentence-transformers>=3.0.0
+# OCR (src/ocr.py). pytesseract is only a wrapper - it also needs the system
+# Tesseract binary: `brew install tesseract` / `apt install tesseract-ocr`.
+# Without it, the OCR tier degrades to "not recovered" rather than failing.
+pytesseract>=0.3.10

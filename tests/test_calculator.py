@@ -27,6 +27,7 @@ class WeightedAverageExpenseRatioTests(unittest.TestCase):
         # Three equal-aum funds -> weighting has no effect, so this is just
         # the arithmetic mean of the expense ratios: (0.2 + 0.4 + 0.6) / 3 = 0.4
         funds = [
+            
             {"expense_ratio": 0.2, "aum": 50},
             {"expense_ratio": 0.4, "aum": 50},
             {"expense_ratio": 0.6, "aum": 50},

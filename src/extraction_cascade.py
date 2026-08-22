@@ -1,70 +1,14 @@
-"""Fallback extraction cascade for real-data mode: regex -> BM25 -> semantic -> LLM -> human review.
-
-This sits *inside* Phase 9c's real-data extraction step, as a more
-cost/latency-aware way to resolve a document's fields than always sending
-the whole thing to the LLM - useful once real documents get long (full
-prospectuses, N-CSRs) rather than the short fact sheets Phase 9's own
-fixture set happened to use. It does not replace `field_extraction.py`'s
-`extract_real_fund_fields` - every tier that reaches the LLM still calls it
-unchanged; this module only decides *what text* to give it, cross-checks
-its numeric answers against a cheap regex pass, and adds a table-data retry
-and a bounded reprompt retry before giving up and flagging for review.
-
-Tier order (see the design conversation this came out of for the reasoning
-behind each choice, not repeated here):
-
-    1. Regex pre-pass (expense_ratio/aum only - is_esg/status structurally
-       need the LLM regardless, per Phase 9's own design decision; regex
-       cannot reliably classify substance). Not a "success -> done" gate
-       the way it can be for a single fixed document format - it's a cheap,
-       best-effort cross-check input for step 5, since the LLM call still
-       has to run either way to get is_esg/status.
-    2. BM25 lexical ranking of pages, to narrow which page(s) get sent to
-       the LLM instead of the whole document.
-    3. Semantic/embedding ranking - STUB. Groq does not host an embedding
-       model, so this needs either a new external embedding API or a heavy
-       local model (sentence-transformers), both real dependency/cost
-       decisions this module does not make unilaterally. Always reports "no
-       confident match", so the cascade falls through to step 4 exactly as
-       it does today (Phase 9c's existing behavior) - this stub makes the
-       cascade neither better nor worse than today for this tier, only
-       honest about not being implemented yet.
-    4. LLM extraction on the narrowed (or, if nothing was confident, full)
-       document text - `extract_real_fund_fields`, unchanged, wrapped in a
-       bounded reprompt retry for transient failures only (not for "field
-       genuinely not found", which no retry will fix).
-    5. Cross-check regex hints (step 1) against the LLM's answer: agreement
-       is a confidence signal, disagreement is flagged for human review
-       rather than silently trusting either source.
-    6. Table-data retry: if expense_ratio/aum is still missing and
-       pdfplumber detected tables (`PDFExtraction.tables` - captured since
-       Phase 2 but never read by anything until now), one more bounded LLM
-       call scoped to just the rendered table text.
-    7. OCR - STUB, for the same reason semantic search is: a real
-       library/approach choice (pytesseract + system Tesseract vs. a
-       vision-capable LLM call) that isn't this module's to make alone.
-       Always reports "not recovered", so an unreadable document still ends
-       up flagged "could not be read" exactly as it does today.
-    8. Human review: anything still unresolved, or any cross-check
-       disagreement, is reported in `CascadeResult.review_reasons` rather
-       than guessed past.
-
-This module is intentionally standalone - it is not yet wired into
-`pipeline.py`'s `_run_real_pipeline`, which still calls
-`extract_real_fund_fields` directly. Swapping that in is a separate,
-separately-testable change.
-"""
-
 from __future__ import annotations
 
 import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
-from groq import Groq
-from rank_bm25 import BM25Okapi
+from groq import APIStatusError, Groq, APIConnectionError
 
+from src import bm25_search, ocr, semantic_search
 from src.field_extraction import DEFAULT_MODEL, RealExtractedFields, extract_real_fund_fields
 from src.pdf_extraction import Table, extract_pdf_content
 from src.source_location import SourceLocation
@@ -76,29 +20,9 @@ logger = logging.getLogger(__name__)
 # stop, matching this project's retry-cap convention everywhere else.
 _MAX_LLM_RETRY_ATTEMPTS = 2
 
-# BM25 "confident enough to narrow" test: the top-ranked page's score must
-# be positive (some real term overlap happened at all) and must dominate
-# the rest of the pages, not just edge them out - otherwise "confident" is
-# doing the guessing this project exists to avoid. This is a heuristic, not
-# a calibrated number - revisit once real long documents are available to
-# tune against.
-_BM25_QUERY = (
-    "ESG environmental social governance expense ratio net assets total "
-    "assets under management active closed fund status"
-)
-_BM25_DOMINANCE_RATIO = 1.5
-_BM25_TOP_K_PAGES = 2
-
 
 @dataclass(frozen=True)
 class FieldResolution:
-    """One field's resolved value, which tier resolved it, and where it came from.
-
-    `resolved_by` is one of: "regex", "llm", "llm_table_data", or
-    "unresolved". Kept as a plain string rather than a Literal/enum so a
-    later tier (semantic, OCR) can be added without touching this type.
-    """
-
     value: object
     resolved_by: str
     source: SourceLocation | None
@@ -106,7 +30,6 @@ class FieldResolution:
 
 @dataclass(frozen=True)
 class CascadeResult:
-    """The outcome of running the full extraction cascade on one document."""
 
     fields: RealExtractedFields
     resolutions: dict[str, FieldResolution]
@@ -207,67 +130,6 @@ def _regex_prepass(file_name: str, pages: list[str]) -> dict[str, tuple[float, S
     return hits
 
 
-# --- Tier 2: BM25 lexical page ranking ----------------------------------------
-
-def _tokenize(text: str) -> list[str]:
-    """Lowercase, alphanumeric-only tokenization - good enough for BM25 term overlap."""
-    return re.findall(r"[a-z0-9]+", text.lower())
-
-
-def _bm25_rank_pages(pages: list[str]) -> list[int] | None:
-    """Return the top-K page indices (0-indexed) most relevant to `_BM25_QUERY`, or None if not confident.
-
-    "Confident" requires the top score to be positive *and* to dominate the
-    rest of the pages by `_BM25_DOMINANCE_RATIO` - a page that merely edges
-    out the others isn't a strong enough signal to narrow the LLM's context
-    to it. This is a heuristic threshold, not a calibrated one; see the
-    module docstring.
-    """
-    if len(pages) <= _BM25_TOP_K_PAGES:
-        # Nothing to narrow - the whole document is already small.
-        return None
-
-    tokenized_pages = [_tokenize(page) for page in pages]
-    bm25 = BM25Okapi(tokenized_pages)
-    scores = bm25.get_scores(_tokenize(_BM25_QUERY))
-
-    ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
-    top_score = scores[ranked[0]]
-    if top_score <= 0:
-        return None
-
-    rest = [scores[i] for i in ranked[1:]] or [0.0]
-    rest_average = sum(rest) / len(rest)
-    if top_score < _BM25_DOMINANCE_RATIO * (rest_average + 1e-6):
-        return None
-
-    return ranked[:_BM25_TOP_K_PAGES]
-
-
-# --- Tier 3: semantic/embedding ranking (STUB - see module docstring) --------
-
-def _semantic_rank_pages(pages: list[str]) -> list[int] | None:  # noqa: ARG001 - signature kept for parity with _bm25_rank_pages
-    """Not implemented. Always reports no confident match - see module docstring.
-
-    Deliberately not raising NotImplementedError: this tier's whole job is
-    to be a *fallback candidate*, so "not available" must degrade to "try
-    the next tier", not crash the cascade. When this is implemented for
-    real, it keeps this exact contract (page indices or None).
-    """
-    return None
-
-
-# --- Tier 7: OCR (STUB - see module docstring) --------------------------------
-
-def _ocr_recover_text(pdf_path: Path) -> list[str] | None:  # noqa: ARG001
-    """Not implemented. Always reports no recovered text - see module docstring.
-
-    Same "return None, don't raise" contract as `_semantic_rank_pages` -
-    an unreadable document must still be reported as "could not be read",
-    not crash the batch, until this is actually built.
-    """
-    return None
-
 
 # --- Bounded retry wrapper for LLM calls --------------------------------------
 
@@ -275,21 +137,19 @@ def _extract_with_retry(text: str, *, client: Groq, model: str) -> RealExtracted
     """Call extract_real_fund_fields, retrying up to `_MAX_LLM_RETRY_ATTEMPTS` on transient failures.
 
     Only retries exceptions that plausibly mean "the model glitched this
-    time" (malformed JSON, missing tool call, a network/API error) - a
-    field genuinely not being in the text is not a transient failure and
-    retrying cannot fix it; that comes back as a normal (non-exceptional)
-    RealExtractedFields with the field null, and is not retried here.
-
-    Returns None (rather than raising) if every attempt fails, so the
-    caller can route to the next cascade tier instead of crashing the
-    whole document's processing - the caller is responsible for surfacing
-    this as a review reason if no later tier recovers it.
-    """
+    time" (malformed JSON, missing tool call, a network/API error)"""
+    #Deterministic Error (Broken Code)The Example: You have a typo in your code, like writing clent instead of client.What happens: Every single time the code runs, it will crash. It is a permanent rule. 
+    #Retrying 3 times changes nothing; it will fail 3 times.
+    #2. Non-Deterministic Behavior (The LLM Surprise)The Example: The Groq LLM reads your text.What happens: Because LLMs are a bit unpredictable, it might give you perfect JSON data on the first try, but on the second try,
+      #it might output a malformed, broken sentence. It is a surprise every time
+    #.3. Transient Error (The Lightning Flash)The Example: Your internet connection blinks out for half a second while talking to Groq.What happens: The code crashes right now because of the network blink. But a second later, the internet is back. This is a super temporary glitch that a retry loop can fix."""
     last_exc: Exception | None = None
     for attempt in range(1, _MAX_LLM_RETRY_ATTEMPTS + 1):
         try:
             return extract_real_fund_fields(text, client=client, model=model)
-        except Exception as exc:  # noqa: BLE001 - deliberately broad: any failure here is a retry candidate, logged either way
+        except (APIConnectionError, APIStatusError, ValueError) as exc: 
+             # we use it as a way to reduce token usage for the llm when we receive api related errors like:
+            #nternet drops out? It matches APIConnectionError. The loop will retry. (Good!)Groq is too busy (Rate limit)? It matches APIStatusError. The loop will retry. (Good!)You made a typo in the model name? This is a developer error. It will not match those exceptions.  
             last_exc = exc
             logger.warning("LLM extraction attempt %d/%d failed: %s", attempt, _MAX_LLM_RETRY_ATTEMPTS, exc)
     logger.error("LLM extraction failed after %d attempts: %s", _MAX_LLM_RETRY_ATTEMPTS, last_exc)
@@ -339,13 +199,29 @@ def extract_with_cascade(
         logger.error("Phase 2 extraction failed for %r: %s", file_name, exc)
         return _unreadable_result(file_name, reason=f"could not be read: {exc}")
 
-    pages = extraction["pages"]
-    assert isinstance(pages, list)
+    # `PDFExtraction` is a loosely-typed dict (str | list[str] | list[Table]),
+    # so this narrows once, here, rather than at each of the several uses below.
+    pages = cast(list[str], extraction["pages"])
     if not any(page.strip() for page in pages):
-        recovered_pages = _ocr_recover_text(pdf_path)
+        # Tier 7, reached early rather than last: the document opened fine but
+        # has no text layer (a scan). Nothing downstream has anything to work
+        # with until OCR recovers some, so it runs here instead of after the
+        # LLM tiers - "last resort" in priority, not in position.
+        logger.info("%s: no extractable text - attempting OCR recovery", file_name)
+        recovered_pages = ocr.recover_text(pdf_path)
         if recovered_pages is None:
             return _unreadable_result(file_name, reason="could not be read: no extractable text")
-        pages = recovered_pages  # pragma: no cover - unreachable until OCR is implemented
+        logger.info("%s: OCR recovered text - continuing the cascade on it", file_name)
+        pages = recovered_pages
+        # Every value from this document now traces back to OCR output, which
+        # is inherently noisier than a real text layer (a misread digit turns
+        # 0.03% into 0.08% with no other symptom). The rest of the cascade
+        # proceeds normally, but the run is flagged so a human knows the
+        # numbers came from a scan - a confidence caveat, not a failure.
+        review_reasons.append(
+            "text was recovered by OCR (no text layer in the source PDF) - "
+            "values are subject to OCR misreads and should be spot-checked"
+        )
 
     full_text = "\n\n".join(pages)
 
@@ -353,10 +229,10 @@ def extract_with_cascade(
     regex_hits = _regex_prepass(file_name, pages)
 
     # --- Tiers 2-3: narrow the LLM's context if a tier is confident ---
-    narrowed_page_indices = _bm25_rank_pages(pages)
+    narrowed_page_indices = bm25_search.rank_pages(pages)
     narrowing_tier = "bm25" if narrowed_page_indices is not None else None
     if narrowed_page_indices is None:
-        narrowed_page_indices = _semantic_rank_pages(pages)
+        narrowed_page_indices = semantic_search.rank_pages(pages)
         narrowing_tier = "semantic" if narrowed_page_indices is not None else None
 
     if narrowed_page_indices is not None:
