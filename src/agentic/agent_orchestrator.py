@@ -50,11 +50,11 @@ from typing import Sequence
 from groq import Groq
 
 from src.calculator import weighted_average_expense_ratio
-from src.field_extraction import DEFAULT_MODEL, ExtractedFields, extract_fund_fields
+from src.extraction.field_extraction import DEFAULT_MODEL, ExtractedFields, extract_fund_fields
 from src.fund_filter import parse_fund_metadata
-from src.pdf_extraction import extract_pdf_content
-from src.query_parser import QuerySpec, parse_query
-from src.retrieval import scope_documents
+from src.extraction.pdf_extraction import extract_pdf_content
+from src.agentic.query_parser import QuerySpec, parse_query
+from src.agentic.retrieval import scope_documents
 from src.verification import check_extraction_quality
 
 
@@ -374,7 +374,7 @@ def _run_phase_12_demo() -> None:
     if not os.environ.get("GROQ_API_KEY"):
         raise SystemExit(
             "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.agent_orchestrator`."
+            "project-root .env file), then re-run `python -m src.agentic.agent_orchestrator`."
         )
 
     _run_phase_12_clean_demo()

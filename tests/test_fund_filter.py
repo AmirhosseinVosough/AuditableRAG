@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from src.fund_filter import FilterSpec, filter_funds
-from src.pdf_extraction import extract_pdf_content
+from src.extraction.pdf_extraction import extract_pdf_content
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

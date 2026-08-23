@@ -8,10 +8,10 @@ from typing import cast
 
 from groq import APIStatusError, Groq, APIConnectionError
 
-from src import bm25_search, ocr, semantic_search
-from src.field_extraction import DEFAULT_MODEL, RealExtractedFields, extract_real_fund_fields
-from src.pdf_extraction import Table, extract_pdf_content
-from src.source_location import SourceLocation
+from src.cascade import bm25_search, ocr, semantic_search
+from src.extraction.field_extraction import DEFAULT_MODEL, RealExtractedFields, extract_real_fund_fields
+from src.extraction.pdf_extraction import Table, extract_pdf_content
+from src.shared.source_location import SourceLocation
 
 
 logger = logging.getLogger(__name__)
@@ -403,10 +403,10 @@ def _run_cascade_demo() -> None:
     if not os.environ.get("GROQ_API_KEY"):
         raise SystemExit(
             "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.extraction_cascade`."
+            "project-root .env file), then re-run `python -m src.cascade.extraction_cascade`."
         )
 
-    from src.real_data_loader import load_real_pdfs
+    from src.extraction.real_data_loader import load_real_pdfs
 
     question = sys.argv[1] if len(sys.argv) > 1 else "What is the fund's ESG status, expense ratio, and net assets?"
     client = Groq()

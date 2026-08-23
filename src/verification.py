@@ -269,7 +269,7 @@ def _extract_text_from_corrupted_copy(raw_pdf_dir: Path) -> str:
         pdfplumber raises trying to parse the corrupted structure (caught
         and logged below) or because it opens but finds no readable pages.
     """
-    from src.pdf_extraction import extract_pdf_content
+    from src.extraction.pdf_extraction import extract_pdf_content
 
     source_pdf = raw_pdf_dir / _DEMO_CORRUPTION_TARGET_FILENAME
     if not source_pdf.is_file():
@@ -306,9 +306,9 @@ def _run_phase_5_demo() -> None:
     """
     from groq import Groq
 
-    from src.field_extraction import ExtractedFields, extract_fund_fields
+    from src.extraction.field_extraction import ExtractedFields, extract_fund_fields
     from src.fund_filter import FilterSpec, filter_funds, parse_fund_metadata
-    from src.pdf_extraction import extract_pdf_content
+    from src.extraction.pdf_extraction import extract_pdf_content
 
     project_root = Path(__file__).resolve().parents[1]
     _load_dotenv(project_root / ".env")

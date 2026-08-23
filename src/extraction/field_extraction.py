@@ -10,7 +10,7 @@ from pathlib import Path
 from groq import Groq
 from groq.types.chat import ChatCompletionToolChoiceOptionParam, ChatCompletionToolParam
 
-from src.model_fallback import call_with_model_fallback, models_to_try
+from src.shared.model_fallback import call_with_model_fallback, models_to_try
 
 # llama-3.3-70b-versatile was retired from Groq. FALLBACK_MODELS[0] (see
 # model_fallback.py) is openai/gpt-oss-120b - verified to force tool calls
@@ -422,7 +422,7 @@ def _run_phase_3_and_4() -> None:
     """Filter to qualifying funds (Phase 3), then extract fields for each (Phase 4)."""
     from src.fund_filter import FilterSpec, filter_funds, parse_fund_metadata
     from src.generate_synthetic_data import FUNDS
-    from src.pdf_extraction import extract_pdf_content
+    from src.extraction.pdf_extraction import extract_pdf_content
 
     project_root = Path(__file__).resolve().parents[1]
     _load_dotenv(project_root / ".env")
@@ -464,7 +464,7 @@ def _run_phase_3_and_4() -> None:
     if not os.environ.get("GROQ_API_KEY"):
         raise SystemExit(
             "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.field_extraction`."
+            "project-root .env file), then re-run `python -m src.extraction.field_extraction`."
         )
 
     client = Groq()

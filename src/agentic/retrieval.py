@@ -27,7 +27,7 @@ from __future__ import annotations
 from typing import Iterable, Mapping
 
 from src.fund_filter import FilterSpec, filter_funds
-from src.query_parser import QuerySpec
+from src.agentic.query_parser import QuerySpec
 
 
 def _query_spec_to_filter_spec(query_spec: QuerySpec) -> FilterSpec:
@@ -97,11 +97,11 @@ def _run_phase_11_demo() -> None:
     if not os.environ.get("GROQ_API_KEY"):
         raise SystemExit(
             "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.retrieval`."
+            "project-root .env file), then re-run `python -m src.agentic.retrieval`."
         )
 
-    from src.pdf_extraction import extract_pdf_content
-    from src.query_parser import parse_query
+    from src.extraction.pdf_extraction import extract_pdf_content
+    from src.agentic.query_parser import parse_query
 
     question = "weighted average expense ratio for ESG funds, excluding funds closed in Q3"
     query_spec = parse_query(question)

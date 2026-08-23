@@ -17,7 +17,7 @@ catching.
 import unittest
 from pathlib import Path
 
-from src import bm25_search, ocr, semantic_search
+from src.cascade import bm25_search, ocr, semantic_search
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -125,7 +125,7 @@ class SemanticRankPagesTests(unittest.TestCase):
         a page carrying none of the target fields, which would hide the answer
         from the LLM entirely.
         """
-        from src.pdf_extraction import extract_pdf_content
+        from src.extraction.pdf_extraction import extract_pdf_content
 
         # Pages (1-indexed) that state at least one of expense ratio, net
         # assets, or an ESG policy - verified by hand against each PDF.

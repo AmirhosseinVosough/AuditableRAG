@@ -33,9 +33,9 @@ from pathlib import Path
 
 import pytest
 
-from src.field_extraction import extract_real_fund_fields
+from src.extraction.field_extraction import extract_real_fund_fields
 from src.fund_filter import FilterSpec
-from src.pdf_extraction import extract_pdf_content
+from src.extraction.pdf_extraction import extract_pdf_content
 from src.pipeline import run_pipeline
 
 

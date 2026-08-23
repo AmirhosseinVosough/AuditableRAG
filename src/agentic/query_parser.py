@@ -33,8 +33,8 @@ from typing import Literal
 from groq import Groq
 from groq.types.chat import ChatCompletionToolChoiceOptionParam, ChatCompletionToolParam
 
-from src.field_extraction import DEFAULT_MODEL
-from src.model_fallback import call_with_model_fallback, models_to_try
+from src.extraction.field_extraction import DEFAULT_MODEL
+from src.shared.model_fallback import call_with_model_fallback, models_to_try
 
 
 @dataclass(frozen=True)
@@ -335,7 +335,7 @@ def _run_phase_10_demo() -> None:
     if not os.environ.get("GROQ_API_KEY"):
         raise SystemExit(
             "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.query_parser`."
+            "project-root .env file), then re-run `python -m src.agentic.query_parser`."
         )
 
     client = Groq()

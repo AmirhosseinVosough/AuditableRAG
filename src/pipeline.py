@@ -77,11 +77,11 @@ from typing import Literal
 from groq import Groq
 
 from src.calculator import weighted_average_expense_ratio
-from src.extraction_cascade import extract_with_cascade
-from src.field_extraction import DEFAULT_MODEL, ExtractedFields, RealExtractedFields, extract_fund_fields
+from src.cascade.extraction_cascade import extract_with_cascade
+from src.extraction.field_extraction import DEFAULT_MODEL, ExtractedFields, RealExtractedFields, extract_fund_fields
 from src.fund_filter import FilterSpec, FundMetadata, filter_funds, parse_fund_metadata
-from src.pdf_extraction import extract_pdf_content
-from src.real_data_loader import load_real_pdfs
+from src.extraction.pdf_extraction import extract_pdf_content
+from src.extraction.real_data_loader import load_real_pdfs
 from src.verification import ExtractionVerificationError, verify_extraction_completeness
 
 
