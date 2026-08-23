@@ -352,16 +352,10 @@ def _run_real_pipeline(
     for pdf_path in pdf_paths:
         identity = pdf_path.stem  # canonical identity for real mode - see module docstring
 
-        # --- run the full extraction cascade for this one document
-        # (extraction_cascade.py: Phase 2 read, then regex -> BM25 ->
-        # semantic-stub -> LLM -> table-data -> OCR-stub -> flag). Isolated
-        # per document, same as the old direct-call version was, so one bad
-        # document can't take down the batch. This replaces what used to be
-        # two separate calls here (extract_pdf_content then
-        # extract_real_fund_fields) - the cascade does both, plus the
-        # cheaper tiers, internally. ---
+        # runs extraction_cascade.py: Phase 2 read, then regex -> BM25 -> semantic -> LLM -> table-data -> OCR -> flag
+        # question drives BM25/semantic narrowing - passed straight through, isolated per document so one bad document can't take down the batch
         try:
-            cascade_result = extract_with_cascade(pdf_path, client=active_client, model=model)
+            cascade_result = extract_with_cascade(pdf_path, question, client=active_client, model=model)
         except Exception as exc:  # noqa: BLE001 - isolate one bad document from the rest of the batch
             logger.error("Extraction cascade failed for %r: %s", pdf_path.name, exc)
             excluded_funds.append(ExcludedFund(name=identity, reason=f"extraction failed: {exc}"))

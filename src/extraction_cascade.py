@@ -169,24 +169,13 @@ def _tables_to_text(tables: list[Table]) -> str:
 
 def extract_with_cascade(
     pdf_path: Path,
+    question: str,
     *,
     client: Groq | None = None,
     model: str = DEFAULT_MODEL,
 ) -> CascadeResult:
-    """Run the full regex -> BM25 -> semantic -> LLM -> table-data -> OCR -> human-review cascade on one document.
-
-    Args:
-        pdf_path: The PDF to process.
-        client: Groq client to reuse. Constructed fresh (`Groq()`) if omitted.
-        model: Model to call for every LLM tier.
-
-    Returns:
-        A CascadeResult. `fields` is always populated (with nulls where
-        nothing resolved); check `needs_human_review` and `review_reasons`
-        rather than assuming a non-null field is fully trustworthy - a
-        cross-check disagreement can leave `needs_human_review=True` even
-        when both `fields` values are non-null.
-    """
+    # runs the full regex -> BM25 -> semantic -> LLM -> table-data -> OCR -> human-review cascade on one document
+    # question is the real end user's question - no hardcoded search text anywhere in this cascade
     active_client = client or Groq()
     file_name = pdf_path.name
     review_reasons: list[str] = []
@@ -229,10 +218,10 @@ def extract_with_cascade(
     regex_hits = _regex_prepass(file_name, pages)
 
     # --- Tiers 2-3: narrow the LLM's context if a tier is confident ---
-    narrowed_page_indices = bm25_search.rank_pages(pages)
+    narrowed_page_indices = bm25_search.rank_pages(pages, question)
     narrowing_tier = "bm25" if narrowed_page_indices is not None else None
     if narrowed_page_indices is None:
-        narrowed_page_indices = semantic_search.rank_pages(pages)
+        narrowed_page_indices = semantic_search.rank_pages(pages, question)
         narrowing_tier = "semantic" if narrowed_page_indices is not None else None
 
     if narrowed_page_indices is not None:
@@ -261,6 +250,40 @@ def extract_with_cascade(
                 fund_name=None, is_esg=None, status=None, expense_ratio=None, aum=None, flags=()
             )
 
+    # --- Tier 4b: narrowing-miss safety net - a field missing after narrowing might just be off the narrowed page(s), not off the document ---
+    narrowing_miss_recovered: set[str] = set()
+    if narrowed_page_indices is not None:
+        missing_fields = [
+            f for f in ("fund_name", "is_esg", "status", "expense_ratio", "aum") if getattr(llm_fields, f) is None
+        ]
+        if missing_fields:
+            logger.info(
+                "%s: %s missing after narrowing to page(s) %s - retrying against the full document",
+                file_name,
+                missing_fields,
+                [i + 1 for i in narrowed_page_indices],
+            )
+            full_doc_fields = _extract_with_retry(full_text, client=active_client, model=model)
+            if full_doc_fields is not None:
+                merged = {f: getattr(llm_fields, f) for f in ("fund_name", "is_esg", "status", "expense_ratio", "aum")}
+                for field_name in missing_fields:
+                    recovered_value = getattr(full_doc_fields, field_name)
+                    if recovered_value is not None:
+                        merged[field_name] = recovered_value
+                        narrowing_miss_recovered.add(field_name)
+                # drop the first pass's "not found" flag for anything the retry actually recovered
+                stale_flags = tuple(
+                    f for f in llm_fields.flags if not any(f.startswith(f"{name}:") for name in narrowing_miss_recovered)
+                )
+                llm_fields = RealExtractedFields(
+                    fund_name=merged["fund_name"],
+                    is_esg=merged["is_esg"],
+                    status=merged["status"],
+                    expense_ratio=merged["expense_ratio"],
+                    aum=merged["aum"],
+                    flags=stale_flags + full_doc_fields.flags,
+                )
+
     resolved = {
         "fund_name": llm_fields.fund_name,
         "is_esg": llm_fields.is_esg,
@@ -269,9 +292,11 @@ def extract_with_cascade(
         "aum": llm_fields.aum,
     }
     for field_name in ("fund_name", "is_esg", "status"):
+        # a field the safety net recovered is tagged distinctly from a normal narrowed/full-text hit
+        llm_resolved_by = "llm_full_document_retry" if field_name in narrowing_miss_recovered else "llm"
         resolutions[field_name] = FieldResolution(
             value=resolved[field_name],
-            resolved_by="llm" if resolved[field_name] is not None else "unresolved",
+            resolved_by=llm_resolved_by if resolved[field_name] is not None else "unresolved",
             source=None,  # full/narrowed-doc LLM calls aren't asked to cite a page - see SourceLocation docstring
         )
 
@@ -280,9 +305,11 @@ def extract_with_cascade(
         llm_value = resolved[field_name]
         regex_hit = regex_hits.get(field_name)
 
+        llm_resolved_by = "llm_full_document_retry" if field_name in narrowing_miss_recovered else "llm"
+
         if regex_hit is None:
             resolutions[field_name] = FieldResolution(
-                value=llm_value, resolved_by="llm" if llm_value is not None else "unresolved", source=None
+                value=llm_value, resolved_by=llm_resolved_by if llm_value is not None else "unresolved", source=None
             )
             continue
 
@@ -298,7 +325,7 @@ def extract_with_cascade(
             )
             resolutions[field_name] = FieldResolution(value=None, resolved_by="unresolved", source=regex_source)
         elif abs(llm_value - regex_value) < 1e-6:
-            resolutions[field_name] = FieldResolution(value=llm_value, resolved_by="llm", source=regex_source)
+            resolutions[field_name] = FieldResolution(value=llm_value, resolved_by=llm_resolved_by, source=regex_source)
         else:
             review_reasons.append(
                 f"{field_name}: regex found {regex_value!r} on page {regex_source.page}, "
@@ -366,8 +393,9 @@ def _load_dotenv(path: Path) -> None:
 
 
 def _run_cascade_demo() -> None:
-    """Run the cascade against every PDF in data/user_uploads/ and print each result."""
+    # runs the cascade against every PDF in data/user_uploads/, using a CLI-supplied question or a plain demo default
     import os
+    import sys
 
     project_root = Path(__file__).resolve().parents[1]
     _load_dotenv(project_root / ".env")
@@ -380,9 +408,10 @@ def _run_cascade_demo() -> None:
 
     from src.real_data_loader import load_real_pdfs
 
+    question = sys.argv[1] if len(sys.argv) > 1 else "What is the fund's ESG status, expense ratio, and net assets?"
     client = Groq()
     for pdf_path in load_real_pdfs(project_root / "data" / "user_uploads"):
-        result = extract_with_cascade(pdf_path, client=client)
+        result = extract_with_cascade(pdf_path, question, client=client)
         print(f"\n=== {pdf_path.name} ===")
         print(f"  fields: {result.fields}")
         for name, resolution in result.resolutions.items():

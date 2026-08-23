@@ -34,6 +34,12 @@ missing package, a failed first-run download (no internet), or an embedding
 error all degrade to "no confident match", so the cascade falls through to
 the LLM tier exactly as it did before this tier existed. A broken model
 makes the cascade cheaper-but-dumber, never broken.
+
+No search text is hardcoded here either. `rank_pages` takes `query` as a
+required argument - the real end user's question, passed through unmodified
+from `pipeline.py`, same contract as `bm25_search.rank_pages`. See that
+module's docstring for how a question that doesn't mention every field gets
+handled downstream.
 """
 
 from __future__ import annotations
@@ -53,15 +59,6 @@ logger = logging.getLogger(__name__)
 # Small (~80MB), CPU-friendly, no API key/cost - see the module docstring for
 # why this was chosen over a paid embedding API.
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-
-# Natural-language rephrasing of `bm25_search.QUERY`'s keyword bag - embedding
-# similarity works on meaning, not term overlap, so this is phrased as a real
-# question rather than a keyword list.
-QUERY = (
-    "Does this page state the fund's ESG or sustainability screening, its "
-    "expense ratio, its net assets or assets under management, or whether "
-    "the fund is currently open or closed?"
-)
 
 # Pages are scored by their best-matching *chunk*, not as a whole - see
 # `_chunk`. ~350 characters is roughly a paragraph: long enough to carry
@@ -160,10 +157,11 @@ def _chunk(text: str) -> list[str]:
     return chunks
 
 
-def rank_pages(pages: list[str]) -> list[int] | None:
-    """Return the top-K page indices (0-indexed) most semantically relevant to `QUERY`, or None if not confident.
+def rank_pages(pages: list[str], query: str) -> list[int] | None:
+    """Return the top-K page indices (0-indexed) most semantically relevant to *query*, or None if not confident.
 
-    Only called when `bm25_search.rank_pages` was not confident (see
+    *query* is caller-supplied - see the module docstring. Only called when
+    `bm25_search.rank_pages` was not confident (see
     `extraction_cascade.extract_with_cascade`) - this tier is deliberately not
     run unconditionally, since it's far slower than BM25 and BM25 already
     resolves the common case.
@@ -199,7 +197,7 @@ def rank_pages(pages: list[str]) -> list[int] | None:
 
     try:
         chunk_embeddings = model.encode(flat_chunks, normalize_embeddings=True, show_progress_bar=False)
-        query_embedding = model.encode(QUERY, normalize_embeddings=True, show_progress_bar=False)
+        query_embedding = model.encode(query, normalize_embeddings=True, show_progress_bar=False)
     except Exception as exc:  # noqa: BLE001 - an embedding failure degrades to the next tier, like a load failure does
         logger.warning("Semantic embedding failed: %s - falling through to the next tier", exc)
         return None

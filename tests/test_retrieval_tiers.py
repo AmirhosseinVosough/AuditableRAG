@@ -44,12 +44,24 @@ _FILLER_PAGE_C = (
     "not individually redeemed from the fund. Brokerage commissions will reduce returns."
 )
 
+# rank_pages() now requires a query argument (no more module-level default) -
+# these are the tests' own stand-ins for a real user's question.
+_BM25_TEST_QUERY = (
+    "ESG environmental social governance expense ratio net assets total "
+    "assets under management active closed fund status"
+)
+_SEMANTIC_TEST_QUERY = (
+    "Does this page state the fund's ESG or sustainability screening, its "
+    "expense ratio, its net assets or assets under management, or whether "
+    "the fund is currently open or closed?"
+)
+
 
 class BM25RankPagesTests(unittest.TestCase):
     def test_finds_the_page_stating_the_fields(self) -> None:
         pages = [_FILLER_PAGE_A, _FILLER_PAGE_B, _TARGET_PAGE, _FILLER_PAGE_C]
 
-        ranked = bm25_search.rank_pages(pages)
+        ranked = bm25_search.rank_pages(pages, _BM25_TEST_QUERY)
 
         self.assertIsNotNone(ranked)
         assert ranked is not None  # narrowing for the type checker
@@ -57,13 +69,13 @@ class BM25RankPagesTests(unittest.TestCase):
 
     def test_abstains_when_document_is_too_small_to_narrow(self) -> None:
         """A document no longer than the top-K cut is already as narrow as it gets."""
-        self.assertIsNone(bm25_search.rank_pages([_TARGET_PAGE, _FILLER_PAGE_A]))
+        self.assertIsNone(bm25_search.rank_pages([_TARGET_PAGE, _FILLER_PAGE_A], _BM25_TEST_QUERY))
 
     def test_abstains_when_no_page_contains_any_query_term(self) -> None:
         """Zero term overlap must abstain, never pick an arbitrary page."""
         pages = ["alpha bravo charlie", "delta echo foxtrot", "golf hotel india", "juliet kilo lima"]
 
-        self.assertIsNone(bm25_search.rank_pages(pages))
+        self.assertIsNone(bm25_search.rank_pages(pages, _BM25_TEST_QUERY))
 
 
 class SemanticRankPagesTests(unittest.TestCase):
@@ -84,7 +96,7 @@ class SemanticRankPagesTests(unittest.TestCase):
     def test_finds_the_page_stating_the_fields(self) -> None:
         pages = [_FILLER_PAGE_A, _FILLER_PAGE_B, _TARGET_PAGE, _FILLER_PAGE_C]
 
-        ranked = semantic_search.rank_pages(pages)
+        ranked = semantic_search.rank_pages(pages, _SEMANTIC_TEST_QUERY)
 
         self.assertIsNotNone(ranked, "a clearly-relevant page among clear filler should clear the gate")
         assert ranked is not None  # narrowing for the type checker
@@ -99,10 +111,10 @@ class SemanticRankPagesTests(unittest.TestCase):
         """
         pages = [_FILLER_PAGE_A, _FILLER_PAGE_B, _FILLER_PAGE_C, _FILLER_PAGE_A]
 
-        self.assertIsNone(semantic_search.rank_pages(pages))
+        self.assertIsNone(semantic_search.rank_pages(pages, _SEMANTIC_TEST_QUERY))
 
     def test_abstains_when_document_is_too_small_to_narrow(self) -> None:
-        self.assertIsNone(semantic_search.rank_pages([_TARGET_PAGE, _FILLER_PAGE_A]))
+        self.assertIsNone(semantic_search.rank_pages([_TARGET_PAGE, _FILLER_PAGE_A], _SEMANTIC_TEST_QUERY))
 
     def test_real_fact_sheets_are_never_narrowed_to_a_page_missing_every_field(self) -> None:
         """On the real fixture set, a confident pick must land on a page that actually states something.
@@ -132,7 +144,7 @@ class SemanticRankPagesTests(unittest.TestCase):
 
             pages = extract_pdf_content(pdf_path)["pages"]
             assert isinstance(pages, list)
-            ranked = semantic_search.rank_pages(pages)
+            ranked = semantic_search.rank_pages(pages, _SEMANTIC_TEST_QUERY)
 
             if ranked is None:
                 continue  # abstaining is always an acceptable outcome
@@ -153,7 +165,7 @@ class SemanticRankPagesTests(unittest.TestCase):
         semantic_search._model, semantic_search._model_unavailable = None, True
         try:
             pages = [_FILLER_PAGE_A, _FILLER_PAGE_B, _TARGET_PAGE, _FILLER_PAGE_C]
-            self.assertIsNone(semantic_search.rank_pages(pages))
+            self.assertIsNone(semantic_search.rank_pages(pages, _SEMANTIC_TEST_QUERY))
         finally:
             semantic_search._model, semantic_search._model_unavailable = saved_model, saved_flag
 
