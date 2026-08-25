@@ -330,7 +330,7 @@ _OUT_OF_SCOPE_QUESTION = "What is the total AUM of all ESG funds?"
 
 def _run_phase_10_demo() -> None:
     """Run the five paraphrases plus the out-of-scope question and print the results."""
-    _load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+    _load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
     if not os.environ.get("GROQ_API_KEY"):
         raise SystemExit(

@@ -16,18 +16,25 @@ FilterSpec itself or reach into fund_filter.py's internals.
 `closed_quarter_exclusions` is deliberately not applied as an independent
 filter dimension - see `_query_spec_to_filter_spec`'s docstring for why.
 
-Real-data scale: see the module-level note near the bottom of this file, and
-the demo output - the honest answer is that this function's *current*
-implementation does not carry over to real-data mode unchanged, for the same
-reason Phase 9c never calls `parse_fund_metadata` on real documents.
+Real-data scale: `scope_documents` below still does not carry over to
+real-data mode unchanged, for the same reason Phase 9c never calls
+`parse_fund_metadata` on real documents - see the demo output at the bottom
+of this file for the full explanation. `scope_real_documents` is the
+real-data counterpart: same QuerySpec-in, names-out shape, but backed by
+`real_classifier.classify_esg_status` (a cheap, narrowed LLM call) instead
+of regex - see `real_classifier.py`'s module docstring for why regex
+couldn't do this job on real documents.
 """
 
 from __future__ import annotations
 
-from typing import Iterable, Mapping
+from typing import Iterable, Mapping, Sequence
+
+from groq import Groq
 
 from src.fund_filter import FilterSpec, filter_funds
 from src.agentic.query_parser import QuerySpec
+from src.agentic.real_classifier import CLASSIFIER_MODEL, classify_esg_status, filter_real_funds
 
 
 def _query_spec_to_filter_spec(query_spec: QuerySpec) -> FilterSpec:
@@ -83,6 +90,56 @@ def scope_documents(
     return filter_funds(extracted_funds, filter_spec)
 
 
+def scope_real_documents(
+    query_spec: QuerySpec,
+    candidates: Sequence[tuple[str, list[str]]],
+    question: str,
+    *,
+    client: Groq | None = None,
+    model: str = CLASSIFIER_MODEL,
+) -> list[str]:
+    """Real-data counterpart to `scope_documents` - same QuerySpec-in, names-out contract.
+
+    Where `scope_documents` reaches `fund_filter.filter_funds` (regex, via
+    `parse_fund_metadata`), this reaches `real_classifier.filter_real_funds`
+    (a cheap, narrowed LLM call per candidate, via `classify_esg_status`) -
+    see `real_classifier.py`'s module docstring for why regex can't do this
+    job on real documents.
+
+    Args:
+        query_spec: The parsed query (from `query_parser.parse_query`)
+            describing which documents are wanted.
+        candidates: `(name, pages)` per real document - `pages` is
+            `extract_pdf_content(path)["pages"]`, i.e. already PDF-extracted,
+            not re-read from disk here.
+        question: The real end user's question text, passed through to each
+            `classify_esg_status` call for BM25/semantic narrowing - kept
+            separate from `query_spec` because narrowing works over raw
+            question text, not the structured spec parsed from it.
+        client: Groq client to use for every classification call.
+            Constructed fresh per call (`Groq()`) if omitted.
+        model: Model to call first for each candidate; see
+            `real_classifier.CLASSIFIER_MODEL`.
+
+    Returns:
+        Qualifying document names, in candidate order - same contract as
+        `scope_documents`, so callers (the orchestrator) can use either
+        interchangeably depending on synthetic vs. real-data mode.
+
+    Raises:
+        ValueError: Propagated from `classify_esg_status` if any candidate
+            has no extractable text, or if classification fails outright for
+            every model in the fallback chain - callers batching many
+        n    real-data call site in this project.
+    """
+    filter_spec = _query_spec_to_filter_spec(query_spec)
+    metadatas = [
+        classify_esg_status(name, pages, question, client=client, model=model)
+        for name, pages in candidates
+    ]
+    return filter_real_funds(metadatas, filter_spec)
+
+
 # --- Phase 11 stopping-condition demo -----------------------------------------
 
 
@@ -126,24 +183,20 @@ def _run_phase_11_demo() -> None:
         print(f"\nMatches data/ground_truth.json's qualifying_funds exactly: {match}")
 
     print(
-        "\nAt real-data scale: this function's current body does not carry over "
-        "unchanged, for the same reason Phase 9c's real-data extraction never "
-        "calls parse_fund_metadata - its regexes are keyed to the synthetic "
-        "fixture's exact field-label text and essentially never match an "
-        "arbitrary real document. What DOES carry over is the shape of the "
-        "idea: resolve is_esg/status cheaply, before paying for full field "
-        "extraction, so a folder of hundreds of real PDFs doesn't mean "
-        "hundreds of expensive LLM calls just to find out which ones even "
-        "qualify. In real-data mode that cheap pre-pass would have to be "
-        "something else - e.g. the regex pre-pass extraction_cascade.py "
-        "already runs (fast, free, no LLM call, works when it works), or a "
-        "lightweight classification pass distinct from the full 5-field "
-        "extraction call - falling through to the full extraction (which is "
-        "what determines is_esg/status today, per Phase 9's design decision) "
-        "only for documents the cheap pass can't confidently classify. That "
-        "narrowing step does not exist yet for real-data mode; this module "
-        "is the synthetic-mode implementation of the general idea, not a "
-        "real-data-ready one."
+        "\nAt real-data scale: this function's own body (scope_documents) still "
+        "does not carry over unchanged, for the same reason Phase 9c's "
+        "real-data extraction never calls parse_fund_metadata - its regexes "
+        "are keyed to the synthetic fixture's exact field-label text and "
+        "essentially never match an arbitrary real document. What DOES carry "
+        "over is the shape of the idea: resolve is_esg/status cheaply, before "
+        "paying for full field extraction, so a folder of hundreds of real "
+        "PDFs doesn't mean hundreds of expensive LLM calls just to find out "
+        "which ones even qualify. See scope_real_documents (this module) and "
+        "real_classifier.py for the real-data-mode implementation of that "
+        "idea: BM25/semantic narrowing (free) followed by one cheap, "
+        "narrow-scope LLM call per candidate (is_esg/status only, not the "
+        "full 5-field extraction) - falling through to the full extraction "
+        "only for documents that survive scoping."
     )
 
 

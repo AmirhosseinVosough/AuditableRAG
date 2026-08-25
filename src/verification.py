@@ -219,6 +219,86 @@ def check_extraction_quality(
     return tuple(problems)
 
 
+# --- Phase 13: severity classification for a failed quality check -----------
+#
+# check_extraction_quality above answers *whether* a fund's fields failed;
+# it says nothing about *how far* past the line they failed by. Phase 13's
+# orchestrator needs that distinction to decide whether a fund that
+# exhausted every retry is safe to auto-exclude (an obviously garbage value
+# - a 999% expense ratio, a wildly negative AUM) or is a genuine edge case a
+# human should glance at before it's thrown away (a value just outside the
+# plausible window - could be a real unusual fund, could be a rounding/unit
+# artifact). Deliberately a new function reading the same raw numbers, not a
+# change to check_extraction_quality's return shape or behavior - existing
+# callers of that function are unaffected.
+#
+# Margins are conservative and, like check_extraction_quality's own bound,
+# heuristic rather than statistically derived - revisit once real borderline
+# cases are observed in production, same caveat this project already
+# attaches to bm25_search.py/semantic_search.py's thresholds.
+_EXPENSE_RATIO_BORDERLINE_MARGIN_PERCENT = 2.0
+_AUM_BORDERLINE_MARGIN_MILLIONS = 5.0
+
+
+def is_borderline_quality_failure(
+    *,
+    expected_name: str,
+    extracted_name: str,
+    expense_ratio: float,
+    aum: float,
+) -> bool:
+    """True if a fund that failed `check_extraction_quality` is a plausible edge case, not obvious garbage.
+
+    Only meaningful to call on a fund that already failed
+    `check_extraction_quality` - this does not re-run those checks, it asks
+    how *far* past the line the failure was, for a fund the caller already
+    knows failed at least one of them.
+
+    A name mismatch is never borderline - it signals the model may have
+    answered about the wrong document entirely, a categorical identity
+    problem no numeric margin can rescue, not a near-miss a human can
+    resolve by eyeballing a number. Only a bounds violation can be
+    borderline, and only when every violating field is within its
+    documented margin of the actual bound - a fund with even one wildly
+    invalid field (e.g. a 999% expense ratio) is never borderline, even if
+    its other field is a near-miss: one obviously-garbage value is reason
+    enough to exclude without spending a human's time.
+
+    Args:
+        expected_name: The fund name Phase 3 parsed for this document.
+        extracted_name: The fund name the failed extraction attempt reported.
+        expense_ratio: The failed attempt's extracted expense ratio.
+        aum: The failed attempt's extracted AUM.
+
+    Returns:
+        True only if the name matched and every failing field was within
+        its borderline margin (and at least one field actually failed -
+        this function assumes the caller already confirmed that via
+        `check_extraction_quality`).
+    """
+    if extracted_name != expected_name:
+        return False
+
+    expense_ratio_valid = 0 < expense_ratio < _MAX_PLAUSIBLE_EXPENSE_RATIO_PERCENT
+    if not expense_ratio_valid:
+        expense_ratio_near_miss = (
+            -_EXPENSE_RATIO_BORDERLINE_MARGIN_PERCENT <= expense_ratio <= 0
+            or _MAX_PLAUSIBLE_EXPENSE_RATIO_PERCENT
+            <= expense_ratio
+            <= _MAX_PLAUSIBLE_EXPENSE_RATIO_PERCENT + _EXPENSE_RATIO_BORDERLINE_MARGIN_PERCENT
+        )
+        if not expense_ratio_near_miss:
+            return False
+
+    aum_valid = aum > 0
+    if not aum_valid:
+        aum_near_miss = -_AUM_BORDERLINE_MARGIN_MILLIONS <= aum <= 0
+        if not aum_near_miss:
+            return False
+
+    return True
+
+
 def _load_dotenv(path: Path) -> None:
     """Populate os.environ from a simple KEY=VALUE .env file, if present.
 

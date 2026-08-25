@@ -424,7 +424,7 @@ def _run_phase_3_and_4() -> None:
     from src.generate_synthetic_data import FUNDS
     from src.extraction.pdf_extraction import extract_pdf_content
 
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = Path(__file__).resolve().parents[2]
     _load_dotenv(project_root / ".env")
 
     pdf_paths = sorted((project_root / "data" / "raw_pdfs").glob("*.pdf"))

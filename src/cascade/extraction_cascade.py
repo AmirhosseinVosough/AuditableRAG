@@ -397,7 +397,7 @@ def _run_cascade_demo() -> None:
     import os
     import sys
 
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = Path(__file__).resolve().parents[2]
     _load_dotenv(project_root / ".env")
 
     if not os.environ.get("GROQ_API_KEY"):
