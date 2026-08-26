@@ -18,11 +18,12 @@ the calculation proceed over an incomplete set.
 from __future__ import annotations
 
 import logging
-import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
+
+from src.shared.env import require_groq_api_key
 
 
 logger = logging.getLogger(__name__)
@@ -299,24 +300,6 @@ def is_borderline_quality_failure(
     return True
 
 
-def _load_dotenv(path: Path) -> None:
-    """Populate os.environ from a simple KEY=VALUE .env file, if present.
-
-    Duplicated from field_extraction.py rather than imported: it's a private
-    (leading-underscore) helper there, and each phase's `__main__` demo is
-    meant to be runnable standalone. Existing environment variables are
-    never overwritten.
-    """
-    if not path.is_file():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
 # --- Phase 5 stopping-condition demo: deliberately corrupt one PDF -----------
 #
 # Target a fund that genuinely qualifies (per data/ground_truth.json) so the
@@ -391,13 +374,7 @@ def _run_phase_5_demo() -> None:
     from src.extraction.pdf_extraction import extract_pdf_content
 
     project_root = Path(__file__).resolve().parents[1]
-    _load_dotenv(project_root / ".env")
-
-    if not os.environ.get("GROQ_API_KEY"):
-        raise SystemExit(
-            "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.verification`."
-        )
+    require_groq_api_key("python -m src.verification")
 
     raw_pdf_dir = project_root / "data" / "raw_pdfs"
     pdf_paths = sorted(raw_pdf_dir.glob("*.pdf"))

@@ -35,6 +35,7 @@ from groq import Groq
 from src.fund_filter import FilterSpec, filter_funds
 from src.agentic.query_parser import QuerySpec
 from src.agentic.real_classifier import CLASSIFIER_MODEL, classify_esg_status, filter_real_funds
+from src.shared.env import PROJECT_ROOT, require_groq_api_key
 
 
 def _query_spec_to_filter_spec(query_spec: QuerySpec) -> FilterSpec:
@@ -145,17 +146,7 @@ def scope_real_documents(
 
 def _run_phase_11_demo() -> None:
     """Parse the original example question, then show scope_documents narrowing the synthetic set."""
-    import os
-    from pathlib import Path
-
-    project_root = Path(__file__).resolve().parents[1]
-    _load_dotenv(project_root / ".env")
-
-    if not os.environ.get("GROQ_API_KEY"):
-        raise SystemExit(
-            "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.agentic.retrieval`."
-        )
+    require_groq_api_key("python -m src.agentic.retrieval")
 
     from src.extraction.pdf_extraction import extract_pdf_content
     from src.agentic.query_parser import parse_query
@@ -165,7 +156,7 @@ def _run_phase_11_demo() -> None:
     print(f"Question: {question}")
     print(f"Parsed QuerySpec: {query_spec}\n")
 
-    raw_pdf_dir = project_root / "data" / "raw_pdfs"
+    raw_pdf_dir = PROJECT_ROOT / "data" / "raw_pdfs"
     pdf_paths = sorted(raw_pdf_dir.glob("*.pdf"))
     extracted_funds = [extract_pdf_content(pdf_path) for pdf_path in pdf_paths]
 
@@ -174,7 +165,7 @@ def _run_phase_11_demo() -> None:
     for name in scoped_names:
         print(f"  - {name}")
 
-    ground_truth_path = project_root / "data" / "ground_truth.json"
+    ground_truth_path = PROJECT_ROOT / "data" / "ground_truth.json"
     if ground_truth_path.is_file():
         import json
 
@@ -198,20 +189,6 @@ def _run_phase_11_demo() -> None:
         "full 5-field extraction) - falling through to the full extraction "
         "only for documents that survive scoping."
     )
-
-
-def _load_dotenv(path) -> None:  # type: ignore[no-untyped-def]
-    """Populate os.environ from a simple KEY=VALUE .env file, if present. See field_extraction.py's copy."""
-    import os
-
-    if not path.is_file():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 if __name__ == "__main__":

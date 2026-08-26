@@ -83,6 +83,7 @@ from src.extraction.pdf_extraction import extract_pdf_content
 from src.agentic.query_parser import QuerySpec, parse_query
 from src.agentic.real_classifier import RealFundMetadata, classify_esg_status, filter_real_funds
 from src.agentic.retrieval import scope_documents
+from src.shared.env import require_groq_api_key
 from src.verification import check_extraction_quality, is_borderline_quality_failure
 
 
@@ -924,20 +925,6 @@ def _write_agentic_run_log(result: dict, run_log_dir: Path, *, filename_prefix: 
 # --- Phase 12 stopping-condition demos ----------------------------------------
 
 
-def _load_dotenv(path: Path) -> None:
-    """Populate os.environ from a simple KEY=VALUE .env file, if present. See field_extraction.py's copy."""
-    import os
-
-    if not path.is_file():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
 def _print_result(result: dict) -> None:
     print(f"Question: {result['question']}")
     print(f"QuerySpec: {result['query_spec']}")
@@ -1026,14 +1013,7 @@ def _run_phase_12_broken_fund_demo() -> None:
 
 
 def _run_phase_12_demo() -> None:
-    _load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-    import os
-
-    if not os.environ.get("GROQ_API_KEY"):
-        raise SystemExit(
-            "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.agentic.agent_orchestrator`."
-        )
+    require_groq_api_key("python -m src.agentic.agent_orchestrator")
 
     _run_phase_12_clean_demo()
     _run_phase_12_broken_fund_demo()
@@ -1110,14 +1090,7 @@ def _run_phase_13_three_bucket_demo() -> None:
 
 
 def _run_phase_13_demo() -> None:
-    _load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-    import os
-
-    if not os.environ.get("GROQ_API_KEY"):
-        raise SystemExit(
-            "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.agentic.agent_orchestrator`."
-        )
+    require_groq_api_key("python -m src.agentic.agent_orchestrator")
 
     _run_phase_13_three_bucket_demo()
 
@@ -1154,14 +1127,7 @@ def _run_phase_16_real_demo() -> None:
 
 
 def _run_phase_16_demo() -> None:
-    _load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-    import os
-
-    if not os.environ.get("GROQ_API_KEY"):
-        raise SystemExit(
-            "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.agentic.agent_orchestrator`."
-        )
+    require_groq_api_key("python -m src.agentic.agent_orchestrator")
 
     _run_phase_16_real_demo()
 

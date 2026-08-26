@@ -11,6 +11,7 @@ from groq import APIStatusError, Groq, APIConnectionError
 from src.cascade import bm25_search, ocr, semantic_search
 from src.extraction.field_extraction import DEFAULT_MODEL, RealExtractedFields, extract_real_fund_fields
 from src.extraction.pdf_extraction import Table, extract_pdf_content
+from src.shared.env import PROJECT_ROOT, require_groq_api_key
 from src.shared.source_location import SourceLocation
 
 
@@ -378,39 +379,17 @@ def extract_with_cascade(
     )
 
 
-def _load_dotenv(path: Path) -> None:
-    """Populate os.environ from a simple KEY=VALUE .env file, if present. See field_extraction.py's copy."""
-    import os
-
-    if not path.is_file():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
 def _run_cascade_demo() -> None:
     # runs the cascade against every PDF in data/user_uploads/, using a CLI-supplied question or a plain demo default
-    import os
     import sys
 
-    project_root = Path(__file__).resolve().parents[2]
-    _load_dotenv(project_root / ".env")
-
-    if not os.environ.get("GROQ_API_KEY"):
-        raise SystemExit(
-            "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.cascade.extraction_cascade`."
-        )
+    require_groq_api_key("python -m src.cascade.extraction_cascade")
 
     from src.extraction.real_data_loader import load_real_pdfs
 
     question = sys.argv[1] if len(sys.argv) > 1 else "What is the fund's ESG status, expense ratio, and net assets?"
     client = Groq()
-    for pdf_path in load_real_pdfs(project_root / "data" / "user_uploads"):
+    for pdf_path in load_real_pdfs(PROJECT_ROOT / "data" / "user_uploads"):
         result = extract_with_cascade(pdf_path, question, client=client)
         print(f"\n=== {pdf_path.name} ===")
         print(f"  fields: {result.fields}")

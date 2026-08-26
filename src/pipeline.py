@@ -68,7 +68,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,6 +81,7 @@ from src.extraction.field_extraction import DEFAULT_MODEL, ExtractedFields, Real
 from src.fund_filter import FilterSpec, FundMetadata, filter_funds, parse_fund_metadata
 from src.extraction.pdf_extraction import extract_pdf_content
 from src.extraction.real_data_loader import load_real_pdfs
+from src.shared.env import require_groq_api_key
 from src.verification import ExtractionVerificationError, verify_extraction_completeness
 
 
@@ -151,24 +151,6 @@ class PipelineResult:
             "counts_match": self.counts_match,
             "verification_error": self.verification_error,
         }
-
-
-def _load_dotenv(path: Path) -> None:
-    """Populate os.environ from a simple KEY=VALUE .env file, if present.
-
-    Duplicated from field_extraction.py / verification.py rather than
-    imported: it's a private helper in both, and each phase's entry point is
-    meant to be runnable standalone. Existing environment variables are
-    never overwritten.
-    """
-    if not path.is_file():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 # ============================================================================
@@ -306,7 +288,7 @@ def _run_synthetic_pipeline(
 def _real_filter_reason(fields: RealExtractedFields, filter_spec: FilterSpec) -> str | None:
     """Human-readable reason a real-mode fund fails *filter_spec*, or None if it qualifies.
 
-    Mirrors `_synthetic_filter_reason` above, but reads from
+    Mirrors `_synthetic_fi`lter_reason` above, but reads from
     `RealExtractedFields` (LLM-determined) instead of `FundMetadata`
     (regex-parsed) - real mode never calls `parse_fund_metadata`, so there
     is no `FundMetadata` to reuse here. Only called once the caller has
@@ -563,13 +545,7 @@ def _run_phase_7_demo() -> None:
     Unchanged by Phase 9 - still the default `python -m src.pipeline`
     behavior, per the instruction not to touch how synthetic mode runs.
     """
-    _load_dotenv(PROJECT_ROOT / ".env")
-
-    if not os.environ.get("GROQ_API_KEY"):
-        raise SystemExit(
-            "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.pipeline`."
-        )
+    require_groq_api_key("python -m src.pipeline")
 
     question = "weighted average expense ratio for ESG funds, excluding funds closed in Q3"
     filter_spec = FilterSpec(is_esg=True, status="active")
@@ -586,13 +562,7 @@ def _run_phase_9_demo() -> None:
     Run this one explicitly instead:
         python -c "from src.pipeline import _run_phase_9_demo; _run_phase_9_demo()"
     """
-    _load_dotenv(PROJECT_ROOT / ".env")
-
-    if not os.environ.get("GROQ_API_KEY"):
-        raise SystemExit(
-            "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file)."
-        )
+    require_groq_api_key('python -c "from src.pipeline import _run_phase_9_demo; _run_phase_9_demo()"')
 
     question = "weighted average expense ratio for ESG active funds"
     filter_spec = FilterSpec(is_esg=True, status="active")

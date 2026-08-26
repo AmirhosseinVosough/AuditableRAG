@@ -25,15 +25,14 @@ guessing a QuerySpec that doesn't actually represent the question.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
 
 from groq import Groq
 from groq.types.chat import ChatCompletionToolChoiceOptionParam, ChatCompletionToolParam
 
 from src.extraction.field_extraction import DEFAULT_MODEL
+from src.shared.env import require_groq_api_key
 from src.shared.model_fallback import call_with_model_fallback, models_to_try
 
 
@@ -254,7 +253,7 @@ def parse_query(
                 {"role": "user", "content": question},
             ],
         )
-
+ 
         tool_calls = response.choices[0].message.tool_calls or []
         for call in tool_calls:
             if call.function.name == _REJECT_TOOL_NAME:
@@ -289,23 +288,6 @@ def parse_query(
     return result
 
 
-def _load_dotenv(path: Path) -> None:
-    """Populate os.environ from a simple KEY=VALUE .env file, if present.
-
-    Duplicated from the other phase modules rather than imported - see
-    field_extraction.py's copy for the full reasoning. Existing environment
-    variables are never overwritten.
-    """
-    if not path.is_file():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
 # --- Phase 10 stopping-condition demo -----------------------------------------
 
 # Five distinct wordings of the original example question
@@ -330,13 +312,7 @@ _OUT_OF_SCOPE_QUESTION = "What is the total AUM of all ESG funds?"
 
 def _run_phase_10_demo() -> None:
     """Run the five paraphrases plus the out-of-scope question and print the results."""
-    _load_dotenv(Path(__file__).resolve().parents[2] / ".env")
-
-    if not os.environ.get("GROQ_API_KEY"):
-        raise SystemExit(
-            "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.agentic.query_parser`."
-        )
+    require_groq_api_key("python -m src.agentic.query_parser")
 
     client = Groq()
 

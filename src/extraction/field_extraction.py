@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from groq import Groq
 from groq.types.chat import ChatCompletionToolChoiceOptionParam, ChatCompletionToolParam
 
+from src.shared.env import require_groq_api_key
 from src.shared.model_fallback import call_with_model_fallback, models_to_try
 
 # llama-3.3-70b-versatile was retired from Groq. FALLBACK_MODELS[0] (see
@@ -402,22 +402,6 @@ def _build_real_extracted_fields(fields: dict[str, object]) -> RealExtractedFiel
     )
 
 
-def _load_dotenv(path: Path) -> None:
-    """Populate os.environ from a simple KEY=VALUE .env file, if present.
-
-    Avoids adding a python-dotenv dependency for this one use. Existing
-    environment variables are never overwritten.
-    """
-    if not path.is_file():
-        return
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
 def _run_phase_3_and_4() -> None:
     """Filter to qualifying funds (Phase 3), then extract fields for each (Phase 4)."""
     from src.fund_filter import FilterSpec, filter_funds, parse_fund_metadata
@@ -425,7 +409,7 @@ def _run_phase_3_and_4() -> None:
     from src.extraction.pdf_extraction import extract_pdf_content
 
     project_root = Path(__file__).resolve().parents[2]
-    _load_dotenv(project_root / ".env")
+    require_groq_api_key("python -m src.extraction.field_extraction")
 
     pdf_paths = sorted((project_root / "data" / "raw_pdfs").glob("*.pdf"))
     extracted_funds = [extract_pdf_content(pdf_path) for pdf_path in pdf_paths]
@@ -460,12 +444,6 @@ def _run_phase_3_and_4() -> None:
         fund.fund_name: (fund.expense_ratio_percent, fund.aum_millions_usd)
         for fund in FUNDS
     }
-
-    if not os.environ.get("GROQ_API_KEY"):
-        raise SystemExit(
-            "GROQ_API_KEY is not set. Set it in your environment (or in a "
-            "project-root .env file), then re-run `python -m src.extraction.field_extraction`."
-        )
 
     client = Groq()
 
