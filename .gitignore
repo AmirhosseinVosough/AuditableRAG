@@ -7,3 +7,4 @@ venv/
 .claude/
 outputs/run_logs/*
 !outputs/run_logs/.gitkeep
+AGENTIC_LAYER_BUILD_PROMPT.md

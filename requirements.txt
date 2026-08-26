@@ -9,3 +9,6 @@ sentence-transformers>=3.0.0
 # Tesseract binary: `brew install tesseract` / `apt install tesseract-ocr`.
 # Without it, the OCR tier degrades to "not recovered" rather than failing.
 pytesseract>=0.3.10
+# api.py - a minimal HTTP wrapper around the agentic pipeline for non-Python users.
+fastapi>=0.115.0
+uvicorn>=0.32.0
