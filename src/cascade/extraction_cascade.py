@@ -168,6 +168,47 @@ def _tables_to_text(tables: list[Table]) -> str:
 
 # --- Orchestrator -------------------------------------------------------------
 
+
+def _narrowed_page_citation(
+    file_name: str,
+    narrowed_page_indices: list[int] | None,
+    narrowing_tier: str | None,
+    *,
+    recovered_via_full_document: bool,
+) -> SourceLocation | None:
+    """Best-effort page-level citation for a value the LLM resolved with no regex hit to fall back on.
+
+    Previously every LLM-only resolution got `source=None` - a human
+    reviewer had no page to check even when the system internally knew
+    exactly which page it narrowed to before ever calling the LLM. This
+    recovers that page number, honestly scoped: it names *which page(s)*
+    the LLM was given, not which line on that page the value came from -
+    the narrower tiers (regex, table-data) still win when they apply; this
+    only fills the gap for the LLM-only path.
+
+    Deliberately returns None (never guesses) in the two cases where there
+    genuinely is no single page to point to, matching `SourceLocation.page`'s
+    own "never guess a page number" rule:
+
+    - `recovered_via_full_document=True` - the value came from
+      Tier 4b's narrowing-miss safety net, which re-reads the *entire*
+      document, not one page. There's no way to know which page it was
+      actually on.
+    - `narrowed_page_indices is None` - neither BM25 nor semantic was
+      confident, so the LLM was handed the whole document, same problem.
+    """
+    if recovered_via_full_document or narrowed_page_indices is None:
+        return None
+
+    top_page = narrowed_page_indices[0] + 1  # 1-indexed, matches this module's logging convention
+    note = f"page-level citation - LLM was narrowed to page {top_page}"
+    if len(narrowed_page_indices) > 1:
+        other_pages = [i + 1 for i in narrowed_page_indices[1:]]
+        note += f" (also given page(s) {other_pages})"
+    note += f" via {narrowing_tier}; exact location on the page was not captured"
+    return SourceLocation(file=file_name, page=top_page, snippet=note)
+
+
 def extract_with_cascade(
     pdf_path: Path,
     question: str,
@@ -294,11 +335,17 @@ def extract_with_cascade(
     }
     for field_name in ("fund_name", "is_esg", "status"):
         # a field the safety net recovered is tagged distinctly from a normal narrowed/full-text hit
-        llm_resolved_by = "llm_full_document_retry" if field_name in narrowing_miss_recovered else "llm"
+        recovered_via_full_document = field_name in narrowing_miss_recovered
+        llm_resolved_by = "llm_full_document_retry" if recovered_via_full_document else "llm"
         resolutions[field_name] = FieldResolution(
             value=resolved[field_name],
             resolved_by=llm_resolved_by if resolved[field_name] is not None else "unresolved",
-            source=None,  # full/narrowed-doc LLM calls aren't asked to cite a page - see SourceLocation docstring
+            source=_narrowed_page_citation(
+                file_name,
+                narrowed_page_indices,
+                narrowing_tier,
+                recovered_via_full_document=recovered_via_full_document,
+            ),
         )
 
     # --- Tier 5: cross-check regex hits against the LLM's numeric answers ---
@@ -310,7 +357,14 @@ def extract_with_cascade(
 
         if regex_hit is None:
             resolutions[field_name] = FieldResolution(
-                value=llm_value, resolved_by=llm_resolved_by if llm_value is not None else "unresolved", source=None
+                value=llm_value,
+                resolved_by=llm_resolved_by if llm_value is not None else "unresolved",
+                source=_narrowed_page_citation(
+                    file_name,
+                    narrowed_page_indices,
+                    narrowing_tier,
+                    recovered_via_full_document=field_name in narrowing_miss_recovered,
+                ),
             )
             continue
 
