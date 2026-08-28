@@ -80,7 +80,7 @@ from src.extraction.field_extraction import DEFAULT_MODEL, ExtractedFields, extr
 from src.extraction.real_data_loader import load_real_pdfs
 from src.fund_filter import FilterSpec, parse_fund_metadata
 from src.extraction.pdf_extraction import extract_pdf_content
-from src.agentic.query_parser import QuerySpec, parse_query
+from src.agentic.query_parser import ClarificationNeeded, QuerySpec, parse_query
 from src.agentic.real_classifier import RealFundMetadata, classify_esg_status, filter_real_funds
 from src.agentic.retrieval import scope_documents
 from src.shared.env import require_groq_api_key
@@ -293,11 +293,24 @@ def run_agentic_pipeline(
             real operating contract - see `_run_phase_12_broken_fund_demo`.
 
     Returns:
-        A dict: {timestamp, question, query_spec, final_answer,
-        included_funds, excluded_funds, needs_human_review, hard_stopped,
-        hard_stop_reason, decision_trace, llm_calls, total_tokens,
-        estimated_cost_usd}. `final_answer` is None if nothing qualified or
-        the run hard-stopped. `needs_human_review` (Phase 13) holds funds
+        Either of two shapes, depending on how far the run got:
+
+        If `query_parser.parse_query` returned a `ClarificationNeeded`
+        (Phase 17) - the question is answerable in principle, but its
+        wording leaves one field unresolved - a smaller dict: {timestamp,
+        question, needs_clarification: True, clarifying_question,
+        ambiguous_field, decision_trace, llm_calls, total_tokens,
+        estimated_cost_usd}. Nothing past REASON ever ran, so there is no
+        query_spec/included_funds/etc. to report - see
+        `_build_clarification_result`. The caller is expected to surface
+        `clarifying_question` to the end user and call this function again
+        with a refined question.
+
+        Otherwise, the full dict: {timestamp, question, query_spec,
+        final_answer, included_funds, excluded_funds, needs_human_review,
+        hard_stopped, hard_stop_reason, decision_trace, llm_calls,
+        total_tokens, estimated_cost_usd}. `final_answer` is None if nothing
+        qualified or the run hard-stopped. `needs_human_review` (Phase 13) holds funds
         that exhausted every retry but were a borderline-plausible
         near-miss rather than obvious garbage - see
         `is_borderline_quality_failure` - kept separate from
@@ -369,10 +382,25 @@ def _run_agentic_synthetic(
     recorder = _LLMCallRecorder(active_client)
 
     # --- REASON: turn the question into structure. No filtering logic here -
-    # parse_query either returns a QuerySpec or raises UnsupportedQueryError;
-    # the orchestrator doesn't second-guess either outcome. ---
+    # parse_query returns a QuerySpec, returns a ClarificationNeeded (Phase
+    # 17), or raises UnsupportedQueryError; the orchestrator doesn't
+    # second-guess any of the three outcomes. ---
     recorder.current_label = "REASON: parse_query"
-    query_spec: QuerySpec = parse_query(question, client=active_client, model=model)
+    parsed = parse_query(question, client=active_client, model=model)
+    if isinstance(parsed, ClarificationNeeded):
+        log(
+            "REASON",
+            f"question ambiguous on {parsed.ambiguous_field!r} - asked: {parsed.question!r}",
+        )
+        result = _build_clarification_result(
+            question=question,
+            clarification=parsed,
+            trace=trace,
+            llm_calls=recorder.calls,
+        )
+        _write_agentic_run_log(result, run_log_dir)
+        return result
+    query_spec: QuerySpec = parsed
     log("REASON", f"parsed question into {query_spec}")
 
     # --- ACT (scope): Phase 2 read, then Phase 11's scope_documents (which is
@@ -648,9 +676,25 @@ def _run_agentic_real(
     recorder = _LLMCallRecorder(active_client)
 
     # --- REASON: identical to the synthetic path - shared vocabulary, not a
-    # real-data-specific step. ---
+    # real-data-specific step. Same three-outcome handling (QuerySpec /
+    # ClarificationNeeded / UnsupportedQueryError) as _run_agentic_synthetic -
+    # the query parser is shared, unmodified, by both paths. ---
     recorder.current_label = "REASON: parse_query"
-    query_spec: QuerySpec = parse_query(question, client=active_client, model=model)
+    parsed = parse_query(question, client=active_client, model=model)
+    if isinstance(parsed, ClarificationNeeded):
+        log(
+            "REASON",
+            f"question ambiguous on {parsed.ambiguous_field!r} - asked: {parsed.question!r}",
+        )
+        result = _build_clarification_result(
+            question=question,
+            clarification=parsed,
+            trace=trace,
+            llm_calls=recorder.calls,
+        )
+        _write_agentic_run_log(result, run_log_dir, filename_prefix="run_agentic_real")
+        return result
+    query_spec: QuerySpec = parsed
     log("REASON", f"parsed question into {query_spec}")
 
     # --- ACT-scope (cheap): load -> read -> classify -> filter, per document,
@@ -900,6 +944,40 @@ def _build_result(
     }
 
 
+def _build_clarification_result(
+    *,
+    question: str,
+    clarification: ClarificationNeeded,
+    trace: Sequence[DecisionTraceEntry],
+    llm_calls: Sequence[dict[str, object]],
+) -> dict:
+    """Assemble the result dict for a Phase 17 ClarificationNeeded outcome - the single place its shape is defined.
+
+    Deliberately not `_build_result` with `query_spec` made optional:
+    parsing never completed here, so there is no included/excluded/
+    needs_human_review/hard_stopped data to report - forcing this outcome
+    through that dict's shape would mean padding it with meaningless empty
+    defaults. A distinct, smaller shape says exactly what happened: parsing
+    stopped at REASON, nothing downstream ever ran.
+
+    Still gets the same audit-trail treatment as every other outcome
+    (`decision_trace`, `llm_calls`, `total_tokens`, `estimated_cost_usd`) -
+    a real, billable LLM call produced this result, and it is written to
+    the run log the same way a hard-stop or a completed answer is.
+    """
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "question": question,
+        "needs_clarification": True,
+        "clarifying_question": clarification.question,
+        "ambiguous_field": clarification.ambiguous_field,
+        "decision_trace": [asdict(entry) for entry in trace],
+        "llm_calls": list(llm_calls),
+        "total_tokens": _total_tokens(llm_calls),
+        "estimated_cost_usd": _estimate_cost_usd(llm_calls),
+    }
+
+
 def _write_agentic_run_log(result: dict, run_log_dir: Path, *, filename_prefix: str = "run_agentic") -> Path:
     """Write *result* as a timestamped JSON file under *run_log_dir* and return its path.
 
@@ -926,6 +1004,18 @@ def _write_agentic_run_log(result: dict, run_log_dir: Path, *, filename_prefix: 
 
 
 def _print_result(result: dict) -> None:
+    if result.get("needs_clarification"):
+        # Phase 17: parsing stopped at REASON - none of the other keys
+        # (query_spec, included_funds, ...) exist on this smaller shape,
+        # see _build_clarification_result.
+        print(f"Question: {result['question']}")
+        print(f"Needs clarification on: {result['ambiguous_field']}")
+        print(f"Clarifying question: {result['clarifying_question']}")
+        print(f"\nDecision trace ({len(result['decision_trace'])} entries):")
+        for entry in result["decision_trace"]:
+            print(f"  [{entry['step']}] {entry['detail']}")
+        return
+
     print(f"Question: {result['question']}")
     print(f"QuerySpec: {result['query_spec']}")
     print(f"\nIncluded ({len(result['included_funds'])}):")
@@ -1132,8 +1222,33 @@ def _run_phase_16_demo() -> None:
     _run_phase_16_real_demo()
 
 
+def _run_phase_17_demo() -> None:
+    """Prove the orchestrator-level branch, not just query_parser.parse_query in isolation.
+
+    Runs a genuinely ambiguous question through the full
+    `run_agentic_pipeline` entry point (synthetic mode - cheapest, and the
+    branch logic is identical in shape on the real-data path) and confirms
+    REASON stops the run early with the ClarificationNeeded shape rather
+    than proceeding to ACT-scope, plus that the run log still gets written
+    for this outcome like any other.
+    """
+    require_groq_api_key("python -m src.agentic.agent_orchestrator")
+
+    print("\n" + "=" * 70)
+    print("PHASE 17: orchestrator-level clarification branch")
+    print("=" * 70)
+    question = "Expense ratio for ESG funds"
+    result = run_agentic_pipeline(question)
+    _print_result(result)
+
+    print(f"\nneeds_clarification: {result.get('needs_clarification')}")
+    print(f"Stopped before ACT-scope (no 'included_funds' key): {'included_funds' not in result}")
+    print(f"llm_calls recorded: {len(result['llm_calls'])}, total_tokens: {result['total_tokens']}")
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     _run_phase_12_demo()
     _run_phase_13_demo()
     _run_phase_16_demo()
+    _run_phase_17_demo()

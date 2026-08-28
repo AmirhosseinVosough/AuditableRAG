@@ -8,18 +8,26 @@ model never decides how to filter or calculate anything itself - it only
 extracts the structured request; Phase 11/12 apply it using the existing
 deterministic filter/extract/verify/calculate logic, unchanged.
 
-Two tools, one required call (`tool_choice="required"`), model picks which:
+Three tools, one required call (`tool_choice="required"`), model picks which:
 
     record_query_spec        - the question maps cleanly onto QuerySpec's fields
     reject_unsupported_query - it doesn't, and the model must say why
+    ask_clarifying_question  - Phase 17: every field the question needs DOES
+                                exist in QuerySpec, but the wording doesn't
+                                clearly resolve to one value for at least one
+                                of them (e.g. "expense ratio for ESG funds"
+                                never says whether closed funds count) - the
+                                honest response is a specific question back,
+                                not a guessed QuerySpec or an outright reject
 
 This is a genuinely different tool_choice shape than Phase 4/9c's forced
 *named* tool call. Phase 4 has exactly one thing to do every time (extract
 these fields), so forcing a single named tool is correct there. Phase 10 has
-a real choice to make - can this question be answered at all - so
-`tool_choice="required"` with two tools, letting the model pick, is the
-right fit: never free text, but able to say "not supported" instead of
-guessing a QuerySpec that doesn't actually represent the question.
+a real choice to make - can this question be answered at all, and if so, is
+it actually clear - so `tool_choice="required"` with multiple tools, letting
+the model pick, is the right fit: never free text, but able to say "not
+supported" or "ambiguous, here's what I need to know" instead of guessing a
+QuerySpec that doesn't actually represent the question.
 """
 
 from __future__ import annotations
@@ -65,6 +73,30 @@ class QuerySpec:
     status: Literal["active", "closed"] | None
     closed_quarter_exclusions: tuple[str, ...]
     requested_metric: Literal["weighted_average_expense_ratio"]
+
+
+@dataclass(frozen=True)
+class ClarificationNeeded:
+    """Phase 17: the question is answerable in principle, but its wording leaves one field unresolved.
+
+    Distinct from `UnsupportedQueryError`: unsupported means the schema has
+    no field that could ever represent what's being asked (a different
+    metric, a dimension this system doesn't track at all). This means every
+    field the question needs *does* exist in `QuerySpec`, but this specific
+    question's wording doesn't clearly resolve to one value for at least one
+    of them - "expense ratio for ESG funds" never says whether closed funds
+    should count, so `status` is genuinely ambiguous, not just "no
+    constraint" (which would itself be a valid, resolved value).
+
+    Returned, not raised, exactly like a `QuerySpec` - this is a valid,
+    expected outcome of parsing, not a failure. Callers are expected to
+    surface `question` to the end user and call `parse_query` again with a
+    refined question; `parse_query` itself does not loop or retry on this
+    outcome - see the module docstring.
+    """
+
+    question: str
+    ambiguous_field: Literal["is_esg", "status", "closed_quarter_exclusions", "requested_metric"]
 
 
 class UnsupportedQueryError(Exception):
@@ -179,14 +211,58 @@ _REJECT_TOOL_SCHEMA: ChatCompletionToolParam = {
     },
 }
 
+_CLARIFY_TOOL_NAME = "ask_clarifying_question"
+
+_CLARIFY_TOOL_SCHEMA: ChatCompletionToolParam = {
+    "type": "function",
+    "function": {
+        "name": _CLARIFY_TOOL_NAME,
+        "description": (
+            "Call this when the question is answerable by this pipeline in principle "
+            "- every field it needs exists in QuerySpec - but the wording does not "
+            "clearly resolve to one value for at least one of those fields. This is "
+            "different from reject_unsupported_query: unsupported means no field "
+            "could ever represent what is being asked (e.g. a different metric like "
+            "total AUM). Ambiguous means the field exists, but this specific "
+            "question's wording does not pin it down - e.g. 'expense ratio for ESG "
+            "funds' never says whether closed funds should count, so status is "
+            "genuinely ambiguous, not simply 'no constraint'."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": (
+                        "A short, specific question to ask the user back, naming "
+                        "exactly what is unclear - not a generic 'can you clarify?'."
+                    ),
+                },
+                "ambiguous_field": {
+                    "type": "string",
+                    "enum": ["is_esg", "status", "closed_quarter_exclusions", "requested_metric"],
+                    "description": "Which QuerySpec field the question's wording leaves unresolved.",
+                },
+            },
+            "required": ["question", "ambiguous_field"],
+        },
+    },
+}
+
 _SYSTEM_PROMPT = (
     "You translate a natural-language fund-aggregation question into a structured "
-    "query for a deterministic pipeline. Call record_query_spec if the question "
-    "maps cleanly onto its fields, or reject_unsupported_query if it does not - "
-    "never answer in free text, and never guess a QuerySpec for a question the "
-    "schema cannot actually represent. Different wordings of the same underlying "
-    "request must produce the same QuerySpec - focus on what is actually being "
-    "asked, not the specific phrasing used to ask it."
+    "query for a deterministic pipeline. Call record_query_spec if the question maps "
+    "cleanly onto its fields. Call reject_unsupported_query if the schema has no "
+    "field that could ever represent what is being asked - e.g. a different metric "
+    "like total AUM, or a filter dimension this schema does not track at all, such "
+    "as geography or fund manager. Call ask_clarifying_question if every field the "
+    "question needs DOES exist in the schema, but the wording does not clearly "
+    "resolve to one value for at least one of them - e.g. 'expense ratio for ESG "
+    "funds' never says whether closed funds should count, so status is ambiguous, "
+    "not absent. Never answer in free text, and never guess a value for a field the "
+    "question does not actually specify. Different wordings of the same underlying "
+    "request must produce the same result - focus on what is actually being asked, "
+    "not the specific phrasing used to ask it."
 )
 
 
@@ -195,8 +271,8 @@ def parse_query(
     *,
     client: Groq | None = None,
     model: str = DEFAULT_MODEL,
-) -> QuerySpec:
-    """Translate *question* into a QuerySpec via a forced tool-call, or reject it.
+) -> QuerySpec | ClarificationNeeded:
+    """Translate *question* into a QuerySpec via a forced tool-call, reject it, or ask for clarification.
 
     Args:
         question: The natural-language question to parse.
@@ -204,12 +280,16 @@ def parse_query(
         model: Model to call.
 
     Returns:
-        The parsed QuerySpec.
+        The parsed QuerySpec if the question was clear. A `ClarificationNeeded`
+        (Phase 17) if the question is answerable in principle but its wording
+        leaves one field unresolved - this is a valid outcome, not an error;
+        callers surface `.question` to the end user and call `parse_query`
+        again with a refined question, exactly like any other REASON step.
 
     Raises:
         ValueError: If `question` is empty/whitespace-only, if the model's
             tool-call arguments aren't valid JSON, or if the model's
-            response doesn't include either expected tool call at all.
+            response doesn't include any of the expected tool calls at all.
         UnsupportedQueryError: If the model determined the question cannot
             be mapped onto QuerySpec's supported fields.
 
@@ -233,19 +313,21 @@ def parse_query(
     # single-named-tool pattern.
     tool_choice: ChatCompletionToolChoiceOptionParam = "required"
 
-    def _call(model_name: str) -> QuerySpec | UnsupportedQueryError:
-        """Returns a QuerySpec on success, or an *unraised* UnsupportedQueryError instance
-        when the model correctly rejects the question. Returning it (rather than raising)
+    def _call(model_name: str) -> QuerySpec | ClarificationNeeded | UnsupportedQueryError:
+        """Returns a QuerySpec/ClarificationNeeded on success, or an *unraised* UnsupportedQueryError
+        instance when the model correctly rejects the question. Returning it (rather than raising)
         is deliberate: call_with_model_fallback treats any exception as "this model failed,
         try the next one," and a correct rejection must never trigger that - it's the right
         answer, not a failure. parse_query raises it itself, once, after the fallback
-        machinery has already decided this was the model's final word.
+        machinery has already decided this was the model's final word. ClarificationNeeded
+        needs no such treatment - it's a plain dataclass, never an exception, so it can
+        never be mistaken for a failure by call_with_model_fallback in the first place.
         """
         response = active_client.chat.completions.create(
             model=model_name,
             max_tokens=400,
             seed=42,
-            tools=[_QUERY_SPEC_TOOL_SCHEMA, _REJECT_TOOL_SCHEMA],
+            tools=[_QUERY_SPEC_TOOL_SCHEMA, _REJECT_TOOL_SCHEMA, _CLARIFY_TOOL_SCHEMA],
             tool_choice=tool_choice,
             temperature=0.0,
             messages=[
@@ -253,7 +335,7 @@ def parse_query(
                 {"role": "user", "content": question},
             ],
         )
- 
+
         tool_calls = response.choices[0].message.tool_calls or []
         for call in tool_calls:
             if call.function.name == _REJECT_TOOL_NAME:
@@ -263,6 +345,16 @@ def parse_query(
                     raise ValueError(f"Model returned malformed tool-call arguments: {exc}") from exc
                 return UnsupportedQueryError(
                     question=question, reason=str(args.get("reason", "not specified"))
+                )
+
+            if call.function.name == _CLARIFY_TOOL_NAME:
+                try:
+                    args = json.loads(call.function.arguments)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Model returned malformed tool-call arguments: {exc}") from exc
+                return ClarificationNeeded(
+                    question=str(args["question"]),
+                    ambiguous_field=args["ambiguous_field"],
                 )
 
             if call.function.name == _QUERY_SPEC_TOOL_NAME:
@@ -278,8 +370,8 @@ def parse_query(
                 )
 
         raise ValueError(
-            "Model response did not include either expected tool call "
-            f"({_QUERY_SPEC_TOOL_NAME!r} or {_REJECT_TOOL_NAME!r})"
+            "Model response did not include any of the expected tool calls "
+            f"({_QUERY_SPEC_TOOL_NAME!r}, {_REJECT_TOOL_NAME!r}, or {_CLARIFY_TOOL_NAME!r})"
         )
 
     result = call_with_model_fallback(_call, models=models_to_try(model))
@@ -317,7 +409,7 @@ def _run_phase_10_demo() -> None:
     client = Groq()
 
     print("=== Five paraphrases of the original example question ===\n")
-    specs: list[QuerySpec] = []
+    specs: list[QuerySpec | ClarificationNeeded] = []
     for question in _PARAPHRASED_QUESTIONS:
         spec = parse_query(question, client=client)
         specs.append(spec)
@@ -325,7 +417,8 @@ def _run_phase_10_demo() -> None:
         print(f"   -> {spec}\n")
 
     all_identical = all(spec == specs[0] for spec in specs)
-    print(f"All 5 QuerySpecs identical: {all_identical}\n")
+    all_query_specs = all(isinstance(spec, QuerySpec) for spec in specs)
+    print(f"All 5 QuerySpecs identical: {all_identical} (all resolved directly, no clarification: {all_query_specs})\n")
 
     print("=== Deliberately out-of-scope question ===\n")
     print(f"Q: {_OUT_OF_SCOPE_QUESTION}")
@@ -336,5 +429,36 @@ def _run_phase_10_demo() -> None:
         print(f"   -> Rejected, as expected: {exc.reason}")
 
 
-if __name__ == "__main__":
+# --- Phase 17 stopping-condition demo ------------------------------------------
+
+# Genuinely ambiguous on purpose: every field this needs (is_esg, status)
+# exists in QuerySpec, but the wording never says whether closed funds
+# should count - unlike _OUT_OF_SCOPE_QUESTION, where no field could ever
+# represent what's being asked at all.
+_AMBIGUOUS_QUESTION = "Expense ratio for ESG funds"
+
+
+def _run_phase_17_demo() -> None:
+    """Re-run Phase 10's regression set, then prove a genuinely ambiguous question asks back instead of guessing."""
+    require_groq_api_key("python -m src.agentic.query_parser")
+
+    print("=" * 70)
+    print("PHASE 10 REGRESSION (must be unaffected by the new clarification tool)")
+    print("=" * 70)
     _run_phase_10_demo()
+
+    print("\n" + "=" * 70)
+    print("PHASE 17: genuinely ambiguous question")
+    print("=" * 70)
+    client = Groq()
+    print(f"Q: {_AMBIGUOUS_QUESTION}")
+    result = parse_query(_AMBIGUOUS_QUESTION, client=client)
+    if isinstance(result, ClarificationNeeded):
+        print(f"   -> ClarificationNeeded(ambiguous_field={result.ambiguous_field!r}, question={result.question!r})")
+        print(f"\nCorrectly asked for clarification instead of guessing: {result.ambiguous_field == 'status'}")
+    else:
+        print(f"   -> UNEXPECTEDLY resolved directly as {result!r} (expected ClarificationNeeded on 'status')")
+
+
+if __name__ == "__main__":
+    _run_phase_17_demo()
