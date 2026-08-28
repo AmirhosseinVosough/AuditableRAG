@@ -8,3 +8,5 @@ venv/
 outputs/run_logs/*
 !outputs/run_logs/.gitkeep
 AGENTIC_LAYER_BUILD_PROMPT.md
+INTERVIEW_PREP_QUESTIONS.md
+.DS_Store
