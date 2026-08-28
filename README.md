@@ -144,11 +144,18 @@ key and makes live API calls.
 
 Flagged rather than hidden, per this project's own "never silently
 proceed" principle:
-- One real-data test (`test_real_pipeline_flags_unreadable_document_without_halting_the_batch`)
-  has failed identically on the same document twice — confirmed
-  reproducible, not yet root-caused.
-- The build spec calls for the Anthropic SDK; the implementation uses Groq
-  throughout — never reconciled.
+- Real-data extraction tests show intermittent live-model variance —
+  different fund/field combinations occasionally fail on different runs
+  (e.g. a status or field the model usually finds coming back empty once),
+  not the same one reproducibly. Even at `temperature=0` with a fixed
+  `seed`, a live API call isn't a perfect determinism guarantee — expected
+  behavior of a live LLM dependency, not a fixed bug in one place.
 - No parallelism yet — extraction is sequential per document.
 - Data privacy/compliance (on-prem hosting, PII redaction) not addressed —
   a real gap before this could touch actual client data.
+- Phase 17 (agentic query clarification) is built and unit-tested, but no
+  live phrasing tried so far has actually triggered it — the model
+  consistently prefers resolving an ambiguous field to "no constraint"
+  over asking. Mechanism verified correct; live trigger rate isn't yet
+  demonstrated. See `AGENTIC_LAYER_BUILD_PROMPT.md`'s Phase 17 section for
+  the full finding.
