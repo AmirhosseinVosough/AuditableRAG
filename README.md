@@ -4,7 +4,7 @@ Firms that hold or advise on baskets of funds constantly need precise, aggregate
 ## The problem this solves
 Without something like this, you have two options: pay someone to do it by hand which is slowly, and rarely the same answer twice; or hand it to an AI and get a fast, confident number that might just be wrong. Neither holds up when a regulator or an auditor asks where that number actually came from.
 
-This project is the third option. The LLM only reads and extracts facts — it never decides what happens next and never touches anything security-sensitive. Code owns the control flow: which document to look at, when to retry, when to give up, when to stop entirely. Deterministic code also handles the filtering and the math, so the same question always gets the same answer. Every number it returns comes with a citation back to the exact page it came from, and anything it isn't sure about gets flagged instead of guessed.
+This project is the third option. The LLM only reads and extracts facts, it never decides what happens next and never touches anything security-sensitive. Code owns the control flow: which document to look at, when to retry, when to give up, when to sso the same question always gets the same answertop entirely. Deterministic code also handles the filtering and the math, . Every number it returns comes with a citation back to the exact page it came from, and anything it isn't sure about gets flagged instead of guessed.
 
 
 ## Architecture: hybrid deterministic/agentic
@@ -25,7 +25,10 @@ orchestration state is hand-written, so every step is inspectable.
 ## Three ways to run it
 
 **1. Synthetic mode** — the deterministic core alone, against a
-hand-verified 12-document synthetic set with a known-correct answer:
+hand-verified 12-document synthetic set with a known-correct answer. This
+exists to test the pipeline's own logic in a controlled, structured
+setting first — a known-correct answer to check against — before ever
+pointing it at a real, messy document:
 ```bash
 python -m src.generate_synthetic_data   # writes data/raw_pdfs/
 python -m src.pipeline                  # runs the deterministic chain, checks against data/ground_truth.json
