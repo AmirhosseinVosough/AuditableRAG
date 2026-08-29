@@ -62,6 +62,25 @@ def _load_dotenv(path: Path) -> None:
 
 _load_dotenv(PROJECT_ROOT / ".env")
 
+def _matches_any_acceptable(actual: float | None, acceptable: list) -> bool:
+    """True if *actual* (possibly None) matches any value in *acceptable*.
+
+    Numeric values are compared with pytest.approx tolerance; None is
+    compared by identity. Generalizes what used to be a binary special-case
+    (acceptable_aum == [None] vs. a single expected number) to any mix of
+    the two, e.g. [223246, 378844, None] - a document can legitimately have
+    more than one defensible correct answer, not just one number or "only
+    null is acceptable".
+    """
+    for value in acceptable:
+        if value is None:
+            if actual is None:
+                return True
+        elif actual is not None and actual == pytest.approx(value):
+            return True
+    return False
+
+
 requires_groq = pytest.mark.skipif(
     not os.environ.get("GROQ_API_KEY"),
     reason="GROQ_API_KEY is not set (env or .env) - Phase 4/9c need a real Groq call.",
@@ -137,21 +156,20 @@ def test_real_data_field_extraction_matches_ground_truth() -> None:
             f"(flags: {fields.flags})"
         )
 
-        if acceptable_aum == [None]:
-            # spy_fact_sheet: the source document never states the fund's own
-            # AUM - only a different, similar-sounding figure (average market
-            # cap of holdings). A guessed number here is the one outcome that
-            # is NOT acceptable, unlike is_esg/status above.
-            assert fields.aum is None, (
-                f"{stem}: aum={fields.aum!r}, but the ground truth says this document does not "
-                f"state its own AUM - a non-null value here means a real figure got confused for it "
-                f"(flags: {fields.flags})"
-            )
-        else:
-            assert fields.aum == pytest.approx(expected["aum_millions_usd"]), (
-                f"{stem}: aum={fields.aum!r}, expected {expected['aum_millions_usd']!r} "
-                f"(flags: {fields.flags})"
-            )
+        # Checked generically against every value in acceptable_aum, not just
+        # a single expected number - vug_fact_sheet is the reason: its source
+        # document states two different, both correctly-labeled, "total net
+        # assets" figures (the ETF share class vs. the whole multi-share-class
+        # fund), so either is a defensible read, and a model declining to pick
+        # between two conflicting document-stated figures (aum=None) is also
+        # legitimate here, not a miss - unlike spy_fact_sheet/spyx_fact_sheet,
+        # where the ONLY acceptable value is None because the document never
+        # states its own AUM at all (a non-null value there means a different,
+        # similar-sounding figure got confused for it - a real failure).
+        assert _matches_any_acceptable(fields.aum, acceptable_aum), (
+            f"{stem}: aum={fields.aum!r} not in acceptable {acceptable_aum!r} "
+            f"(flags: {fields.flags})"
+        )
 
 
 @requires_groq

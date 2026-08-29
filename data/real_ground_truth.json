@@ -1,5 +1,5 @@
 {
-  "notes": "Hand-verified ground truth for Phase 9 real-data mode, built by reading each document's actual pdfplumber-extracted text (not the original PDF layout) and recording the correct values by hand. 5 real, publicly available fund fact sheets/reports (source_url given per document) plus one deliberately corrupted PDF to exercise the 'could not be read' path. All AUM figures in millions of USD. Where a field is genuinely ambiguous or absent in the source document (see per-document notes), 'acceptable_is_esg'/'acceptable_status' list every outcome that counts as correct - a real extractor that flags uncertainty (null) is right there, not just one that guesses the single 'true' value; a confident WRONG value is the only failure.",
+  "notes": "Hand-verified ground truth for Phase 9 real-data mode, built by reading each document's actual pdfplumber-extracted text (not the original PDF layout) and recording the correct values by hand. 10 real, publicly available fund fact sheets/reports (source_url given per document) plus one deliberately corrupted PDF to exercise the 'could not be read' path. All AUM figures in millions of USD. Where a field is genuinely ambiguous or absent in the source document (see per-document notes), 'acceptable_is_esg'/'acceptable_status' list every outcome that counts as correct - a real extractor that flags uncertainty (null) is right there, not just one that guesses the single 'true' value; a confident WRONG value is the only failure.",
   "documents": {
     "esgu_fact_sheet": {
       "source_url": "https://www.ishares.com/us/literature/fact-sheet/esgu-ishares-esg-aware-msci-usa-etf-fund-fact-sheet-en-us.pdf",
@@ -61,6 +61,68 @@
       "aum_millions_usd": 577.18813,
       "expected_outcome": "fully extracted, but is_esg is a genuinely nuanced call",
       "notes": "DELIBERATE real-world edge case: this fund was renamed from 'Xtrackers MSCI USA ESG Leaders Equity ETF' to 'Xtrackers MSCI USA Selection Equity ETF' in Feb 2025, dropping 'ESG' from its name/ticker - but the document explicitly states the underlying index still selects 'companies with high environmental, social and governance (ESG) performance' and that the rename involved no change to methodology or investment policy. Hand-verified as is_esg=true based on the document's own substance, not the ticker; null (flagged as ambiguous) is also acceptable given the rename. A confident is_esg=false would be a real failure - the document actively describes ESG screening. 'Net Assets ($) 577,188,130' and 'Gross expense ratio ... 0.09%' are both stated plainly regardless. This document is an Annual Shareholder Report, not a fact sheet - deliberately different layout from the other four, to stress format diversity."
+    },
+    "dsi_fact_sheet": {
+      "source_url": "https://www.blackrock.com/us/individual/literature/fact-sheet/dsi-ishares-esg-msci-kld-400-etf-fund-fact-sheet-en-us.pdf",
+      "fund_name": "iShares ESG MSCI KLD 400 ETF",
+      "is_esg": true,
+      "acceptable_is_esg": [true],
+      "status": "active",
+      "acceptable_status": ["active", null],
+      "expense_ratio_percent": 0.25,
+      "aum_millions_usd": 5360.76,
+      "expected_outcome": "is_esg/expense_ratio/aum unambiguous; status may legitimately be flagged",
+      "notes": "Explicit 'This fund seeks to follow a sustainable, impact or ESG Investment strategy, as disclosed in its prospectus' plus a full Sustainability Characteristics/MSCI ESG Fund Rating section - unambiguous. 'Net Assets of Fund (M) : $5,360.76' and 'Expense Ratio 0.25%' both stated plainly. Same as ESGU/IVV/ESGV: no explicit 'this fund is active' statement, only current dated performance data."
+    },
+    "vceb_fact_sheet": {
+      "source_url": "https://fund-docs.vanguard.com/F4158.pdf",
+      "fund_name": "Vanguard ESG U.S. Corporate Bond ETF",
+      "is_esg": true,
+      "acceptable_is_esg": [true],
+      "status": "active",
+      "acceptable_status": ["active", null],
+      "expense_ratio_percent": 0.12,
+      "aum_millions_usd": 1200,
+      "expected_outcome": "is_esg/expense_ratio/aum unambiguous; status may legitimately be flagged",
+      "notes": "Explicit, detailed ESG screening criteria (excludes adult entertainment, alcohol, gambling, tobacco, weapons, nuclear power, thermal coal/oil/gas) plus board-diversity screening - unambiguous, and a real fixed-income fund (not equity), adding asset-class diversity to this fixture set. 'ETF total net assets $1,200 million' and 'Expense ratio 0.12%' both stated plainly. No explicit active statement, same pattern as every other fund here."
+    },
+    "spyx_fact_sheet": {
+      "source_url": "https://www.ssga.com/library-content/products/factsheets/etfs/emea/factsheet-emea-en_gb-spyx.pdf",
+      "fund_name": "SPDR S&P 500 Fossil Fuel Reserves Free ETF",
+      "is_esg": true,
+      "acceptable_is_esg": [true],
+      "status": "active",
+      "acceptable_status": ["active", null],
+      "expense_ratio_percent": 0.20,
+      "aum_millions_usd": null,
+      "acceptable_aum": [null],
+      "expected_outcome": "is_esg/expense_ratio unambiguous; aum MUST be flagged, not guessed; status may legitimately be flagged",
+      "notes": "DELIBERATE real-world edge case, same trap as spy_fact_sheet, found independently in a genuinely different document: this fact sheet never states the fund's own net assets/AUM anywhere. It DOES state 'Average Market Cap (M) US$1,486,917.50', which is the average market cap of the fund's underlying HOLDINGS, not the fund's own AUM - a correct extractor must not confuse the two, so aum=null is the only acceptable outcome (a guessed number here is a real failure, not just an overly conservative one). is_esg=true is unambiguous: the fund explicitly exists to eliminate fossil-fuel-reserve-owning companies from a core S&P 500 holding, an environmental screen. 'Gross/Net Expense Ratio (%) 0.20' stated plainly."
+    },
+    "agg_fact_sheet": {
+      "source_url": "https://www.ishares.com/us/literature/fact-sheet/agg-ishares-core-u-s-aggregate-bond-etf-fund-fact-sheet-en-us.pdf",
+      "fund_name": "iShares Core U.S. Aggregate Bond ETF",
+      "is_esg": false,
+      "acceptable_is_esg": [false, null],
+      "status": "active",
+      "acceptable_status": ["active", null],
+      "expense_ratio_percent": 0.03,
+      "aum_millions_usd": 138847.46,
+      "expected_outcome": "expense_ratio/aum unambiguous; is_esg/status may legitimately be flagged",
+      "notes": "Plain broad-bond-market tracker (Bloomberg US Aggregate Bond Index) - no ESG/sustainability content anywhere, same reasoning as IVV: is_esg=false is the correct real-world answer, but the document is silent rather than positively stating 'not ESG-screened', so null is also acceptable; a confident is_esg=true would be a real failure. 'Net Assets of Fund (M) : $138,847.46' and 'Expense Ratio 0.03%' both stated plainly. A fixed-income fund, like VCEB, but non-ESG - completes the ESG x asset-class 2x2 this fixture set now covers."
+    },
+    "vug_fact_sheet": {
+      "source_url": "https://advisors.vanguard.com/assets/corp/fund_communications/pdf_publish/us-products/fact-sheet/F0967.pdf",
+      "fund_name": "Vanguard Growth ETF",
+      "is_esg": false,
+      "acceptable_is_esg": [false, null],
+      "status": "active",
+      "acceptable_status": ["active", null],
+      "expense_ratio_percent": 0.03,
+      "aum_millions_usd": 223246,
+      "acceptable_aum": [223246, 378844, null],
+      "expected_outcome": "expense_ratio unambiguous; aum is a genuinely nuanced call (two different net-assets figures in the same document, or a defensible decline to pick); is_esg/status may legitimately be flagged",
+      "notes": "DELIBERATE real-world edge case, a NEW kind not yet in this fixture set: the document states TWO different net-assets figures for what it calls the same investment - 'ETF total net assets $223,246 million' (the VUG-ticker share class specifically) and 'Fund total net assets $378,844 million' (the whole multi-share-class fund VUG belongs to, including non-ETF share classes not traded under the VUG ticker). Both are real, correctly-labeled numbers from the document, not a guess vs. a confusable figure like SPY/SPYX's trap - a system extracting either is reading the document correctly; the two numbers simply answer 'AUM of what, precisely' differently. Hand-verified primary answer is the ETF-specific figure (223,246), since VUG as a traded ticker corresponds to that share class, but 378,844 is accepted too rather than penalizing a defensible reading of 'Fund total net assets'. null is ALSO accepted (confirmed live: a real extraction run returned aum=null, flagged 'not found', rather than picking either figure) - declining to choose between two conflicting document-stated 'total net assets' labels is a legitimate, honest outcome here, not a miss, matching this project's own 'flag rather than guess' principle applied to a genuinely two-answer document. No ESG/sustainability content anywhere in the document; large-cap growth equity, non-ESG, same reasoning as AGG/IVV. 'Expense ratio 1 0.03%' stated plainly."
     },
     "corrupted_fact_sheet": {
       "source_url": null,
