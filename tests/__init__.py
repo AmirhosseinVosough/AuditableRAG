@@ -1,1 +1,1 @@
-"""Tests for the fund aggregation pipeline."""
+"""Tests for FundTrace."""
