@@ -1,1 +1,1 @@
-"""FundTrace: a hybrid deterministic/agentic fund-aggregation pipeline."""
+"""AuditableRAG: a hybrid deterministic/agentic fund-aggregation pipeline."""

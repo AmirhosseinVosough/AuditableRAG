@@ -1,1 +1,1 @@
-"""Tests for FundTrace."""
+"""Tests for AuditableRAG."""

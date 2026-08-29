@@ -35,7 +35,7 @@ from src.shared.env import load_dotenv
 load_dotenv()
 
 app = FastAPI(
-    title="FundTrace",
+    title="AuditableRAG",
     description=(
         "Ask a fund-aggregation question (e.g. \"weighted average expense ratio for "
         "ESG active funds\") and get back the full agentic pipeline's result: which "
@@ -55,7 +55,7 @@ class QuestionRequest(BaseModel):
 def root() -> dict[str, str]:
     """Landing message - points a visitor at the interactive docs, the actual intended entry point."""
     return {
-        "message": "FundTrace API is running.",
+        "message": "AuditableRAG API is running.",
         "try_it": "Open /docs in your browser for an interactive form - no code required.",
     }
 

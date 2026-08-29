@@ -1,4 +1,4 @@
-# FundTrace
+# AuditableRAG
 
 Real fund PDFs are messy — inconsistent formatting, numbers buried in tables, fields that don't line up. This pipeline handles that by splitting the work: the LLM only reads and extracts facts; a deterministic layer decides which funds qualify and does the math. Every extracted value comes with a citation back to the source page, and the synthetic test set stays in place as a permanent, hand-verified regression check.
 
