@@ -4,6 +4,7 @@ Why this exists: `retrieval.scope_documents` (Phase 11) narrows candidate
 documents *before* paying for full field extraction - but it does that by
 calling `fund_filter.parse_fund_metadata`, whose regexes are keyed to the
 synthetic fixture's exact field-label text (e.g. a literal "ESG: Yes" line).
+
 Real documents don't write is_esg/status as a fixed label - they describe it
 in free text ("the Fund integrates ESG factors...", "this Fund does not
 employ exclusionary screens..."), which regex cannot reliably read for

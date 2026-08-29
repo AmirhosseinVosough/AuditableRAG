@@ -1,12 +1,11 @@
 # AuditableRAG
-
-Real fund PDFs are messy — inconsistent formatting, numbers buried in tables, fields that don't line up. This pipeline handles that by splitting the work: the LLM only reads and extracts facts; a deterministic layer decides which funds qualify and does the math. Every extracted value comes with a citation back to the source page, and the synthetic test set stays in place as a permanent, hand-verified regression check.
+Firms that hold or advise on baskets of funds constantly need precise, aggregate figures. That data sits scattered across thousands of unstructured, messy PDFs, each formatted differently, which makes it hard to pull anything out reliably. This project doesn't just pull the numbers out ,it logs the reason behind every decision it makes, cites the exact page each value came from, and if it isn't sure about something, it says so instead of guessing.
 
 ## The problem this solves
+Without something like this, you have two options: pay someone to do it by hand which is slowly, and rarely the same answer twice; or hand it to an AI and get a fast, confident number that might just be wrong. Neither holds up when a regulator or an auditor asks where that number actually came from.
 
-Normally, getting that number means someone sitting down, opening every PDF by hand, deciding which funds actually qualify, and doing the math themselves — slow, tedious, and one tired afternoon away from a subtle mistake. The obvious shortcut — "just have an AI read everything and spit out the number" — trades that problem for a worse one: a black box. When it's wrong, nobody can say why, and there's nothing to show a regulator or auditor who asks where the number actually came from.
+This project is the third option. The LLM only reads and extracts facts — it never decides what happens next and never touches anything security-sensitive. Code owns the control flow: which document to look at, when to retry, when to give up, when to stop entirely. Deterministic code also handles the filtering and the math, so the same question always gets the same answer. Every number it returns comes with a citation back to the exact page it came from, and anything it isn't sure about gets flagged instead of guessed.
 
-So this project draws a hard line and never crosses it. The LLM's only job is to read — find a fact on a page, or admit it can't. It never decides which funds count, and it never touches the math. Everything else — every inclusion, every exclusion, every number — is plain, deterministic code, and it all traces back to the exact document and page it came from.
 
 ## Architecture: hybrid deterministic/agentic
 
