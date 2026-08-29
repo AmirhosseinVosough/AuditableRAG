@@ -1,34 +1,16 @@
 # Fund Aggregation Pipeline
 
-A transparent, hybrid deterministic/agentic pipeline for answering auditable
-fund-aggregation questions — "what's the weighted average expense ratio
-across our ESG funds, excluding any that closed this quarter?" — from real
-or synthetic fund documents (fact sheets, prospectuses), with a full audit
-trail from question to final number.
+Real fund PDFs are messy — inconsistent formatting, numbers buried in tables, fields that don't line up. This pipeline handles that by splitting the work: the LLM only reads and extracts facts; a deterministic layer decides which funds qualify and does the math. Every extracted value comes with a citation back to the source page, and the synthetic test set stays in place as a permanent, hand-verified regression check.
 
 ## The problem this solves
 
-That kind of number normally means a human opening every PDF by hand,
-deciding which funds qualify, and doing the math themselves — slow and
-easy to get subtly wrong. The obvious fix, "just ask an AI to read
-everything and give you the number," creates a worse problem: a black box.
-If it's wrong, nobody can tell why, and there's no trail for a regulator or
-auditor asking "where did this number come from."
+Normally, getting that number means someone sitting down, opening every PDF by hand, deciding which funds actually qualify, and doing the math themselves — slow, tedious, and one tired afternoon away from a subtle mistake. The obvious shortcut — "just have an AI read everything and spit out the number" — trades that problem for a worse one: a black box. When it's wrong, nobody can say why, and there's nothing to show a regulator or auditor who asks where the number actually came from.
 
-This project's answer: split the work into two kinds and never let them
-mix. The LLM is only ever used to *read* — pull a fact off a page, or say
-"not found." It never decides which funds qualify and never does the
-arithmetic. Every other decision is plain, deterministic code, and every
-value, inclusion, and exclusion is logged with a reason back to its source
-document and page.
+So this project draws a hard line and never crosses it. The LLM's only job is to read — find a fact on a page, or admit it can't. It never decides which funds count, and it never touches the math. Everything else — every inclusion, every exclusion, every number — is plain, deterministic code, and it all traces back to the exact document and page it came from.
 
 ## Architecture: hybrid deterministic/agentic
 
-The hybrid split is structurally enforced, not just a design intention.
-`src/agentic/agent_orchestrator.py` is the one file allowed to reason about
-*what to do next* (retry, escalate, give up) — and it is only allowed to do
-that by calling a fixed set of deterministic tools, never reimplementing
-their logic:
+This isn't just a design intention — it's enforced by the code itself. `src/agentic/agent_orchestrator.py` is the only file allowed to decide what happens next (retry, escalate, give up), and even it can't just wing that decision. Every one of those calls has to go through a fixed set of deterministic tools below; it never reimplements their logic itself.
 
 | Deterministic tool | Lives in | Called as |
 |---|---|---|
@@ -104,6 +86,16 @@ match that same ground truth's documented "legitimately ambiguous, correct
 to flag rather than guess" cases — IVV and SPY are plain S&P 500 trackers
 whose fact sheets never state an ESG position either way.
 
+The real-document fixture set has since grown to 10 (adding iShares DSI/AGG,
+Vanguard VCEB/VUG, and SPDR SPYX), each hand-verified the same way — the
+field-level extraction test passes against all 10 live. Two more real edge
+cases turned up along the way: SPYX repeats SPY's exact "states holdings'
+average market cap, never its own AUM" trap in an independently-found
+document, and VUG's own fact sheet states two different, both
+correctly-labeled "total net assets" figures for its share class vs. the
+broader multi-share-class fund — either figure, or a flagged `null`, is a
+legitimate answer there, not a miss.
+
 ## Project layout
 
 ```
@@ -115,8 +107,9 @@ src/
   extraction/                            PDF text extraction, LLM field extraction, real-data loading
   cascade/                               real-data extraction cascade: regex -> BM25 -> semantic ->
                                           LLM -> table-data -> OCR -> flag, with citations
-  agentic/                               Phases 10-16: query parsing, document scoping, the real
-                                          agentic loop (agent_orchestrator.py)
+  agentic/                               Phases 10-17: query parsing, document scoping, the real
+                                          agentic loop (agent_orchestrator.py), clarification for
+                                          ambiguous questions
   shared/                                cross-cutting: model fallback, .env loading, provenance types
 tests/                                   pytest suite - fast/mocked control-flow tests plus
                                           live end-to-end ground-truth checks
@@ -126,19 +119,12 @@ tests/                                   pytest suite - fast/mocked control-flow
 
 ```bash
 pytest tests/test_agentic_orchestrator.py tests/test_agentic_real_orchestrator.py \
-       tests/test_calculator.py tests/test_fund_filter.py tests/test_retrieval_tiers.py
+       tests/test_calculator.py tests/test_fund_filter.py tests/test_retrieval_tiers.py \
+       tests/test_query_clarification.py
 ```
 Fast, deterministic, no `GROQ_API_KEY` required. The full suite (including
 `test_pipeline.py`/`test_real_data_pipeline.py`) additionally needs a real
 key and makes live API calls.
-
-## Documentation
-
-- `AGENTIC_LAYER_BUILD_PROMPT.md` — the full phase-by-phase build spec and
-  status, including design decisions and honestly-flagged open issues, not
-  just what shipped.
-- `INTERVIEW_PREP_QUESTIONS.md` — a self-quiz question bank covering the
-  architecture end to end, no answers included on purpose.
 
 ## Known open items
 
@@ -157,5 +143,5 @@ proceed" principle:
   live phrasing tried so far has actually triggered it — the model
   consistently prefers resolving an ambiguous field to "no constraint"
   over asking. Mechanism verified correct; live trigger rate isn't yet
-  demonstrated. See `AGENTIC_LAYER_BUILD_PROMPT.md`'s Phase 17 section for
-  the full finding.
+  demonstrated.
+
