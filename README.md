@@ -24,49 +24,32 @@ orchestration state is hand-written, so every step is inspectable.
 
 ## How the loop works
 
-The agentic path is a plain REASON → ACT → EVALUATE loop with two exits: a
-bounded retry back to ACT, and an escape hatch to a human whenever the data
-isn't clear.
+`REASON → ACT → EVALUATE`, repeating, with the repeats capped in code.
 
-```mermaid
-flowchart TD
-    Q["Plain-English question"] --> R["REASON: turn the question into a precise request"]
-    R -.->|too vague| ASK["Ask the user to clarify, then start over"]
-    R --> A["ACT: scope the documents, then read the numbers out, each tied to a page"]
-    A --> E{"EVALUATE: is each number trustworthy?"}
-    E -->|technical glitch| RT["RETRY (at most twice)"]
-    RT --> A
-    E -->|missing or uncertain| H["ESCALATE: flag for a human, leave out of the answer"]
-    E -->|clean| C{"Enough solid data left? (more than half lost, stop)"}
-    C -->|no| STOP["HARD-STOP: refuse rather than answer on too little"]
-    C -->|yes| ANS["ANSWER: weighted average + full decision trace"]
+```
+question
+  -> REASON     parse into a structured query; if it's too vague, ask back instead of guessing
+  -> ACT        narrow to the matching documents, then pull each number out with a page citation
+  -> EVALUATE   check every value:
+       clean            keep it
+       technical error  retry, back to ACT (at most twice)
+       missing / shaky  hand to a human, leave it out of the answer
+  -> gate       if more than half the candidate funds dropped out, stop rather than answer thin
+  -> ANSWER     weighted average over what survived, plus the full decision trace
 ```
 
-Step by step, following one real run over the 11 fact sheets in
-`data/user_uploads/`, for the question *"weighted average expense ratio for
-ESG active funds"*:
+One real run, over the 11 fact sheets in `data/user_uploads/`, for
+*"weighted average expense ratio for ESG active funds"*:
 
-1. **REASON.** Turn the sentence into a precise request: ESG funds, still
-   active, calculate the size-weighted average fee. The model fills in a
-   fixed form; it never reasons freely about what you "probably meant." If
-   the question is genuinely ambiguous it stops and asks back instead of
-   guessing.
-2. **ACT, scope.** A quick, cheap check on all 11 documents: ESG? active?
-   → 5 set aside (1 corrupted file, 4 plain index funds that state no ESG
-   position), each with a written reason; 6 go forward.
-3. **ACT, extract.** For those 6, pull the annual fee and the fund size,
-   each tied to the exact page it came from. Cheapest method first (plain
-   text search), escalating to slower ones only when that fails.
-4. **EVALUATE.** Check every number. → 4 clean; 2 not (one fund's size is
-   nowhere in its document; one had two methods disagree).
-5. **RETRY.** Only for technical failures (network, file I/O), capped at 2.
-   A merely uncertain result is never retried. → 0 retries this run.
-6. **ESCALATE.** The 2 uncertain funds go to a human-review list with their
-   citations, and are left out of the calculation.
-7. **Safety check.** If more than half the relevant funds were lost, stop
-   and refuse. → 2 of 6 unresolved = 33%, under the 50% limit, so continue.
-8. **ANSWER.** Weighted average fee over the 4 clean funds = **0.1422%**,
-   returned with the full decision trace (every step and reason, in order).
+- **REASON** → ESG, active, size-weighted average fee.
+- **ACT** → of 11 documents, 5 drop out (1 corrupted, 4 with no stated ESG
+  position) and 6 are kept; then fee and size are extracted for each, cited
+  to a page.
+- **EVALUATE** → 4 clean, 2 flagged (one fund's size isn't stated in its
+  document; one had two extraction methods disagree). No retries; neither
+  was a technical failure.
+- **gate** → 2 of 6 unresolved is 33%, under the 50% limit, so it continues.
+- **ANSWER** → weighted average over the 4 = **0.1422%**.
 
 ## Three ways to run it
 
